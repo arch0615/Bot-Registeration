@@ -469,14 +469,15 @@ class API:
             await page.click(selector)
             await page.fill(selector, "")
             await page.type(selector, value, delay=50)
-            await page.wait_for_timeout(800)
-            dropdown = page.locator(f"{selector} ~ ul li, [role='listbox'] [role='option'], .autocomplete-suggestion, .suggestion-item, .MuiAutocomplete-option").first
+            await page.wait_for_timeout(1000)
+            dropdown = page.locator("mat-option, [role='listbox'] [role='option'], .autocomplete-suggestion, .MuiAutocomplete-option").first
             try:
                 await dropdown.wait_for(state="visible", timeout=3000)
                 await dropdown.click()
             except Exception:
                 await page.keyboard.press("ArrowDown")
                 await page.keyboard.press("Enter")
+            await page.wait_for_timeout(300)
         elif field_type == "date":
             parts = value.split("/")
             if len(parts) == 3:

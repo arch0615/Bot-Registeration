@@ -32,24 +32,27 @@ REGISTRATION_STEPS = [
     {
         "name": "Page 5 - Name",
         "fields": [
-            {"csv_col": "First name", "selector": "",  "type": "fill"},  # TODO: Nome selector
-            {"csv_col": "Last name",  "selector": "",  "type": "fill"},  # TODO: Cognome selector
+            {"csv_col": "First name", "selector": "#nome",    "type": "fill"},
+            {"csv_col": "Last name",  "selector": "#cognome", "type": "fill"},
         ],
-        "submit_selector": "button:has-text('AVANTI')",
+        "submit_selector": "button.go-on-btn",
         "wait_after": "",
     },
     # ── Page 6: Birth & Gender ───────────────────────────────────────
     {
         "name": "Page 6 - Birth & Gender",
         "fields": [
-            {"csv_col": "__birthday__",  "selector": "",  "type": "date"},          # TODO: date input selector
-            {"csv_col": "Nation",        "selector": "",  "type": "autocomplete"},   # TODO: Nazione selector
-            {"csv_col": "__province__",  "selector": "",  "type": "autocomplete"},   # TODO: Provincia selector
-            {"csv_col": "Comune",        "selector": "",  "type": "autocomplete"},   # TODO: Comune selector
-            {"csv_col": "__gender__",    "selector": "",  "type": "radio_map",       # TODO: gender radio selectors
-             "selector_map": {"Maschile": "", "Femminile": ""}},
+            {"csv_col": "__birthday__",  "selector": "#dataDiNascita",  "type": "date"},
+            {"csv_col": "Nation",        "selector": "#nazione",        "type": "autocomplete"},
+            {"csv_col": "__province__",  "selector": "#provincia",      "type": "autocomplete"},
+            {"csv_col": "Comune",        "selector": "#comune",         "type": "autocomplete"},
+            {"csv_col": "__gender__",    "selector": "",                 "type": "radio_map",
+             "selector_map": {
+                 "Maschile":  "mat-radio-group[formcontrolname='sesso'] mat-radio-button[value='M']",
+                 "Femminile": "mat-radio-group[formcontrolname='sesso'] mat-radio-button[value='F']",
+             }},
         ],
-        "submit_selector": "button:has-text('AVANTI')",
+        "submit_selector": "button.go-on-btn",
         "wait_after": "",
     },
     # ── Page 7: Address ──────────────────────────────────────────────
