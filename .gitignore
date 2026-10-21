@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+*.log
+settings.json
+results_*.csv
+run_*.log
+node_modules/
+.venv/
+venv/
