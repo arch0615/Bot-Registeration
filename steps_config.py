@@ -59,43 +59,43 @@ REGISTRATION_STEPS = [
     {
         "name": "Page 7 - Address",
         "fields": [
-            {"csv_col": "__province_of_residence__",  "selector": "",  "type": "autocomplete"},  # TODO
-            {"csv_col": "City of residence",          "selector": "",  "type": "autocomplete"},  # TODO
-            {"csv_col": "Address",                    "selector": "",  "type": "fill"},          # TODO
-            {"csv_col": "__house_number__",            "selector": "",  "type": "fill"},          # TODO
-            {"csv_col": "ZIP Code (CAP)",             "selector": "",  "type": "fill"},          # TODO
+            {"csv_col": "__province_of_residence__",  "selector": "#provinciaResidenza",  "type": "autocomplete"},
+            {"csv_col": "City of residence",          "selector": "#comuneResidenza",     "type": "autocomplete"},
+            {"csv_col": "Address",                    "selector": "#indirizzoResidenza",   "type": "fill"},
+            {"csv_col": "__house_number__",            "selector": "#civicoResidenza",      "type": "fill"},
+            {"csv_col": "ZIP Code (CAP)",             "selector": "#capResidenza",          "type": "fill"},
         ],
-        "submit_selector": "button:has-text('AVANTI')",
+        "submit_selector": "button.go-on-btn",
         "wait_after": "",
     },
     # ── Page 8: Security Question ────────────────────────────────────
     {
         "name": "Page 8 - Security",
         "fields": [
-            {"csv_col": "__security_question__",  "selector": "",  "type": "select"},  # TODO
-            {"csv_col": "__security_answer__",    "selector": "",  "type": "fill"},    # TODO
+            {"csv_col": "__security_question__",  "selector": "#domandaSegreta",  "type": "mat_select"},
+            {"csv_col": "__security_answer__",    "selector": "#risposta",         "type": "fill"},
         ],
-        "submit_selector": "button:has-text('AVANTI')",
+        "submit_selector": "button.go-on-btn",
         "wait_after": "",
     },
     # ── Page 9: Spending Limit ───────────────────────────────────────
     {
         "name": "Page 9 - Spending Limit",
         "fields": [
-            {"csv_col": "__spending_limit__",  "selector": "",  "type": "select"},  # TODO
+            {"csv_col": "__spending_limit__",  "selector": "mat-select[formcontrolname='limite']",  "type": "mat_select"},
         ],
-        "submit_selector": "button:has-text('AVANTI')",
+        "submit_selector": "button.go-on-btn",
         "wait_after": "",
     },
     # ── Page 10: Terms & Conditions ──────────────────────────────────
     {
         "name": "Page 10 - Terms",
         "fields": [
-            {"csv_col": "", "selector": "",  "type": "check"},  # TODO: Contratto checkbox
-            {"csv_col": "", "selector": "",  "type": "radio"},  # TODO: Accetto radio
-            {"csv_col": "", "selector": "",  "type": "check"},  # TODO: Privacy checkbox
+            {"csv_col": "", "selector": "mat-checkbox#mat-mdc-checkbox-gadplatform7",  "type": "check"},
+            {"csv_col": "", "selector": "mat-radio-button#mat-radio-gadplatform21",     "type": "radio"},
+            {"csv_col": "", "selector": "mat-checkbox#mat-mdc-checkbox-gadplatform8",  "type": "check"},
         ],
-        "submit_selector": "button:has-text('AVANTI')",
+        "submit_selector": "div.registrati-btn-container button",
         "wait_after": "",
     },
     # ── Close Jumio Modal ────────────────────────────────────────────

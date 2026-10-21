@@ -459,6 +459,18 @@ class API:
                 await page.click(target)
         elif field_type == "select":
             await page.select_option(selector, value)
+        elif field_type == "mat_select":
+            await page.click(selector)
+            await page.wait_for_timeout(500)
+            option = page.locator(f"mat-option:has-text('{value}')").first
+            try:
+                await option.wait_for(state="visible", timeout=3000)
+                await option.click()
+            except Exception:
+                options = page.locator("mat-option")
+                if await options.count() > 0:
+                    await options.first.click()
+            await page.wait_for_timeout(300)
         elif field_type == "click":
             await page.click(selector)
         elif field_type == "click_first":

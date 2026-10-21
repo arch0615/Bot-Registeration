@@ -660,7 +660,7 @@ function renderFieldMap(fieldMap) {
     const col = document.createElement('input'); col.className = 'field-inp'; col.placeholder = 'e.g. email'; col.value = m.csv_col || '';
     const sel = document.createElement('input'); sel.className = 'field-inp'; sel.placeholder = 'e.g. #email'; sel.value = m.selector || '';
     const typ = document.createElement('select'); typ.className = 'type-select';
-    ['fill','check','radio','radio_map','select','click','click_first','autocomplete','date'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
+    ['fill','check','radio','radio_map','select','mat_select','click','click_first','autocomplete','date'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
     typ.value = m.type || 'fill';
     const del = document.createElement('button'); del.className = 'fmap-del'; del.type = 'button';
     del.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
@@ -701,7 +701,7 @@ function renderSteps(steps) {
       const col = document.createElement('input'); col.className = 'field-inp'; col.placeholder = 'e.g. username'; col.value = f.csv_col || '';
       const sel = document.createElement('input'); sel.className = 'field-inp'; sel.placeholder = 'e.g. #username'; sel.value = f.selector || '';
       const typ = document.createElement('select'); typ.className = 'type-select';
-      ['fill','check','radio','radio_map','select','click','click_first','autocomplete','date'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
+      ['fill','check','radio','radio_map','select','mat_select','click','click_first','autocomplete','date'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
       typ.value = f.type || 'fill';
       const del = document.createElement('button'); del.className = 'fmap-del'; del.type = 'button';
       del.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
