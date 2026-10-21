@@ -7,6 +7,7 @@ import asyncio
 import csv
 import io
 import json
+import random
 import re
 import sys
 import threading
@@ -36,6 +37,9 @@ DEFAULT_SETTINGS = {
     "last_csv":           "",
     "steps":              [],
 }
+
+class _SkipStep(Exception):
+    pass
 
 UUID_RE = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', re.I
@@ -440,11 +444,72 @@ class API:
             return "€ 100.000"
         return str(row.get(col, "")).strip()
 
+    CURSOR_INJECT_JS = """
+    (() => {
+        if (document.getElementById('__bot_cursor')) return;
+        const cur = document.createElement('div');
+        cur.id = '__bot_cursor';
+        cur.style.cssText = `
+            position: fixed; z-index: 2147483647; pointer-events: none;
+            width: 20px; height: 20px; top: -40px; left: -40px;
+            transition: top 0.25s ease-out, left 0.25s ease-out;
+        `;
+        cur.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" width="20" height="28" viewBox="0 0 17 24">
+            <path fill="#fff" stroke="#000" stroke-width="1.2"
+                  d="M1 1l0 17.4 4.2-4.2 3.5 7.5 2.7-1.3-3.5-7.5h5.9z"/>
+        </svg>`;
+        document.body.appendChild(cur);
+        document.addEventListener('mousemove', e => {
+            cur.style.top = e.clientY + 'px';
+            cur.style.left = e.clientX + 'px';
+        });
+    })();
+    """
+
+    async def _inject_cursor(self, page):
+        try:
+            await page.evaluate(self.CURSOR_INJECT_JS)
+        except Exception:
+            pass
+
+    async def _move_to_element(self, page, selector):
+        """Move the mouse cursor to an element's center with a smooth path."""
+        try:
+            el = page.locator(selector).first
+            await el.scroll_into_view_if_needed()
+            box = await el.bounding_box()
+            if box:
+                tx = box["x"] + box["width"] / 2
+                ty = box["y"] + box["height"] / 2
+                await page.mouse.move(tx, ty, steps=random.randint(8, 15))
+                await asyncio.sleep(random.uniform(0.1, 0.3))
+        except Exception:
+            pass
+
+    async def _human_type(self, page, selector, value):
+        """Type text character by character with random human-like delays."""
+        await page.click(selector)
+        await page.fill(selector, "")
+        for ch in value:
+            await page.keyboard.type(ch)
+            await asyncio.sleep(random.uniform(0.05, 0.18))
+
+    async def _random_pause(self, short=False):
+        """Random pause to break robotic timing patterns."""
+        if short:
+            await asyncio.sleep(random.uniform(0.3, 0.8))
+        else:
+            await asyncio.sleep(random.uniform(0.8, 2.0))
+
     async def _apply_field(self, page, selector, value, field_type, field_cfg=None):
         """Apply a single field action based on its type."""
         field_type = (field_type or "fill").lower()
+        await self._inject_cursor(page)
+        if selector:
+            await self._move_to_element(page, selector)
+        await self._random_pause(short=True)
         if field_type == "fill":
-            await page.fill(selector, value)
+            await self._human_type(page, selector, value)
         elif field_type == "check":
             if not value or value.lower() in ("true", "1", "yes", "si", "sì"):
                 await page.check(selector)
@@ -461,35 +526,40 @@ class API:
             await page.select_option(selector, value)
         elif field_type == "mat_select":
             await page.click(selector)
-            await page.wait_for_timeout(500)
+            await self._random_pause()
             option = page.locator(f"mat-option:has-text('{value}')").first
             try:
                 await option.wait_for(state="visible", timeout=3000)
+                await self._random_pause(short=True)
                 await option.click()
             except Exception:
                 options = page.locator("mat-option")
                 if await options.count() > 0:
                     await options.first.click()
-            await page.wait_for_timeout(300)
+            await self._random_pause(short=True)
         elif field_type == "click":
             await page.click(selector)
         elif field_type == "click_first":
             el = page.locator(selector).first
             await el.scroll_into_view_if_needed()
+            await self._random_pause(short=True)
             await el.click()
         elif field_type == "autocomplete":
             await page.click(selector)
             await page.fill(selector, "")
-            await page.type(selector, value, delay=50)
-            await page.wait_for_timeout(1000)
+            for ch in value:
+                await page.keyboard.type(ch)
+                await asyncio.sleep(random.uniform(0.05, 0.18))
+            await self._random_pause()
             dropdown = page.locator("mat-option, [role='listbox'] [role='option'], .autocomplete-suggestion, .MuiAutocomplete-option").first
             try:
                 await dropdown.wait_for(state="visible", timeout=3000)
+                await self._random_pause(short=True)
                 await dropdown.click()
             except Exception:
                 await page.keyboard.press("ArrowDown")
                 await page.keyboard.press("Enter")
-            await page.wait_for_timeout(300)
+            await self._random_pause(short=True)
         elif field_type == "date":
             parts = value.split("/")
             if len(parts) == 3:
@@ -499,13 +569,13 @@ class API:
             else:
                 fake = "1/1/2000"
             await page.click(selector)
-            await page.fill(selector, fake)
-            await page.wait_for_timeout(500)
-            await page.fill(selector, "")
-            await page.fill(selector, value)
-            await page.wait_for_timeout(300)
+            await self._human_type(page, selector, fake)
+            await self._random_pause()
+            await self._human_type(page, selector, value)
+            await self._random_pause(short=True)
         else:
-            await page.fill(selector, value)
+            await self._human_type(page, selector, value)
+        await self._random_pause(short=True)
 
     async def _fill(self, pw, ws, row, settings, field_map):
         browser = None
@@ -518,6 +588,8 @@ class API:
                 wait_until="domcontentloaded",
                 timeout=30_000
             )
+            await self._inject_cursor(page)
+            await self._random_pause()
 
             steps = settings.get("steps") or []
 
@@ -526,36 +598,70 @@ class API:
                     step_fields = step.get("fields", [])
                     step_submit = step.get("submit_selector", "")
                     wait_sel    = step.get("wait_after", "")
+                    optional    = step.get("optional", False)
 
                     self._emit("log", {"lvl": "info", "msg": f"  Step {si+1}: {step.get('name', f'Page {si+1}')}"})
 
-                    for m in step_fields:
-                        col  = m.get("csv_col", "")
-                        sel  = m.get("selector", "")
-                        ftype = m.get("type", "fill")
+                    try:
+                        for m in step_fields:
+                            col  = m.get("csv_col", "")
+                            sel  = m.get("selector", "")
+                            ftype = m.get("type", "fill")
 
-                        if ftype in ("radio", "click", "click_first"):
-                            if sel:
+                            if not sel:
+                                continue
+
+                            if optional:
+                                try:
+                                    await page.wait_for_selector(sel, timeout=3000)
+                                except PWTimeout:
+                                    self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped"})
+                                    raise _SkipStep()
+
+                            if ftype in ("radio", "click", "click_first"):
                                 await self._apply_field(page, sel, "", ftype)
-                        elif ftype == "check":
-                            if sel:
+                            elif ftype == "check":
                                 val = self._resolve_value(col, row) if col else ""
                                 await self._apply_field(page, sel, val, ftype)
-                        elif ftype == "radio_map":
-                            val = self._resolve_value(col, row) if col else ""
-                            if val:
-                                await self._apply_field(page, sel, val, ftype, m)
-                        else:
-                            val = self._resolve_value(col, row)
-                            if col and sel and val:
-                                await self._apply_field(page, sel, val, ftype)
+                            elif ftype == "radio_map":
+                                val = self._resolve_value(col, row) if col else ""
+                                if val:
+                                    await self._apply_field(page, sel, val, ftype, m)
+                            else:
+                                val = self._resolve_value(col, row)
+                                if col and sel and val:
+                                    await self._apply_field(page, sel, val, ftype)
 
-                    if step_submit:
-                        await page.click(step_submit)
-                        if wait_sel:
-                            await page.wait_for_selector(wait_sel, timeout=15_000)
-                        else:
-                            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                        if step_submit:
+                            await self._random_pause()
+                            await self._move_to_element(page, step_submit)
+                            await page.click(step_submit)
+                            if wait_sel:
+                                await page.wait_for_selector(wait_sel, timeout=15_000)
+                            else:
+                                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                    except _SkipStep:
+                        continue
+
+                # Check for registration failure and always go back to page 1
+                reg_failed = False
+                error_el = page.locator("text=La registrazione non è andata a buon fine")
+                try:
+                    await error_el.wait_for(state="visible", timeout=5000)
+                    reg_failed = True
+                    self._emit("log", {"lvl": "warn", "msg": "  Registration failed"})
+                except PWTimeout:
+                    pass
+
+                self._emit("log", {"lvl": "info", "msg": "  Navigating back to page 1"})
+                await page.goto(
+                    settings["registration_url"],
+                    wait_until="domcontentloaded",
+                    timeout=30_000
+                )
+
+                if reg_failed:
+                    return False, "Registration failed — returned to page 1"
 
             else:
                 for m in field_map:

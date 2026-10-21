@@ -98,13 +98,14 @@ REGISTRATION_STEPS = [
         "submit_selector": "div.registrati-btn-container button",
         "wait_after": "",
     },
-    # ── Close Jumio Modal ────────────────────────────────────────────
+    # ── Close Jumio Modal (if present) ─────────────────────────────────
     {
         "name": "Close Jumio Modal",
         "fields": [
-            {"csv_col": "", "selector": "",  "type": "click"},  # TODO: X close button selector
+            {"csv_col": "", "selector": "",  "type": "click"},  # TODO: close button selector
         ],
         "submit_selector": "",
         "wait_after": "",
+        "optional": True,
     },
 ]
