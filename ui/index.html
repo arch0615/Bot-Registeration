@@ -338,7 +338,7 @@
 
           <div class="field-group"><span class="section-title" style="margin-top:4px">Form Steps</span></div>
           <div class="hint-box" style="margin-bottom:8px">
-            Define each page/step of the registration form. Each step has its own fields and a submit/next button. Field types: <strong>fill</strong> (text input), <strong>check</strong> (checkbox), <strong>radio</strong> (click a radio option), <strong>select</strong> (dropdown), <strong>click</strong> (generic click).
+            Define each page/step of the registration form. Each step has its own fields and a submit/next button. Field types: <strong>fill</strong> (text input), <strong>check</strong> (checkbox), <strong>radio</strong> (click a radio option), <strong>select</strong> (dropdown), <strong>click</strong> (generic click), <strong>click_first</strong> (click first matching element). Use <code>__username__</code> as CSV column to auto-generate username from email.
           </div>
           <div id="stepsList"></div>
           <button class="btn" id="btnAddStep" style="margin-top:4px">
@@ -660,7 +660,7 @@ function renderFieldMap(fieldMap) {
     const col = document.createElement('input'); col.className = 'field-inp'; col.placeholder = 'e.g. email'; col.value = m.csv_col || '';
     const sel = document.createElement('input'); sel.className = 'field-inp'; sel.placeholder = 'e.g. #email'; sel.value = m.selector || '';
     const typ = document.createElement('select'); typ.className = 'type-select';
-    ['fill','check','radio','select','click'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
+    ['fill','check','radio','radio_map','select','click','click_first','autocomplete','date'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
     typ.value = m.type || 'fill';
     const del = document.createElement('button'); del.className = 'fmap-del'; del.type = 'button';
     del.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
@@ -701,7 +701,7 @@ function renderSteps(steps) {
       const col = document.createElement('input'); col.className = 'field-inp'; col.placeholder = 'e.g. username'; col.value = f.csv_col || '';
       const sel = document.createElement('input'); sel.className = 'field-inp'; sel.placeholder = 'e.g. #username'; sel.value = f.selector || '';
       const typ = document.createElement('select'); typ.className = 'type-select';
-      ['fill','check','radio','select','click'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
+      ['fill','check','radio','radio_map','select','click','click_first','autocomplete','date'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
       typ.value = f.type || 'fill';
       const del = document.createElement('button'); del.className = 'fmap-del'; del.type = 'button';
       del.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';

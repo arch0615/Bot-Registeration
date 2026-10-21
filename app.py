@@ -42,6 +42,56 @@ UUID_RE = re.compile(
 )
 
 
+def generate_username(email: str) -> str:
+    prefix = email.split("@")[0] if "@" in email else email
+    username = re.sub(r'[^a-zA-Z0-9]', '', prefix)
+    if len(username) < 6:
+        username = username.ljust(6, '0')
+    return username[:14]
+
+
+PROVINCE_MAP = {
+    "AG": "Agrigento", "AL": "Alessandria", "AN": "Ancona", "AO": "Aosta",
+    "AP": "Ascoli Piceno", "AQ": "L'Aquila", "AR": "Arezzo", "AT": "Asti",
+    "AV": "Avellino", "BA": "Bari", "BG": "Bergamo", "BI": "Biella",
+    "BL": "Belluno", "BN": "Benevento", "BO": "Bologna", "BR": "Brindisi",
+    "BS": "Brescia", "BT": "Barletta-Andria-Trani", "BZ": "Bolzano",
+    "CA": "Cagliari", "CB": "Campobasso", "CE": "Caserta", "CH": "Chieti",
+    "CL": "Caltanissetta", "CN": "Cuneo", "CO": "Como", "CR": "Cremona",
+    "CS": "Cosenza", "CT": "Catania", "CZ": "Catanzaro", "EN": "Enna",
+    "FC": "Forlì-Cesena", "FE": "Ferrara", "FG": "Foggia", "FI": "Firenze",
+    "FM": "Fermo", "FR": "Frosinone", "GE": "Genova", "GO": "Gorizia",
+    "GR": "Grosseto", "IM": "Imperia", "IS": "Isernia", "KR": "Crotone",
+    "LC": "Lecco", "LE": "Lecce", "LI": "Livorno", "LO": "Lodi",
+    "LT": "Latina", "LU": "Lucca", "MB": "Monza e Brianza", "MC": "Macerata",
+    "ME": "Messina", "MI": "Milano", "MN": "Mantova", "MO": "Modena",
+    "MS": "Massa-Carrara", "MT": "Matera", "NA": "Napoli", "NO": "Novara",
+    "NU": "Nuoro", "OR": "Oristano", "PA": "Palermo", "PC": "Piacenza",
+    "PD": "Padova", "PE": "Pescara", "PG": "Perugia", "PI": "Pisa",
+    "PN": "Pordenone", "PO": "Prato", "PR": "Parma", "PT": "Pistoia",
+    "PU": "Pesaro e Urbino", "PV": "Pavia", "PZ": "Potenza", "RA": "Ravenna",
+    "RC": "Reggio Calabria", "RE": "Reggio Emilia", "RG": "Ragusa",
+    "RI": "Rieti", "RM": "Roma", "RN": "Rimini", "RO": "Rovigo",
+    "SA": "Salerno", "SI": "Siena", "SO": "Sondrio", "SP": "La Spezia",
+    "SR": "Siracusa", "SS": "Sassari", "SU": "Sud Sardegna", "SV": "Savona",
+    "TA": "Taranto", "TE": "Teramo", "TN": "Trento", "TO": "Torino",
+    "TP": "Trapani", "TR": "Terni", "TS": "Trieste", "TV": "Treviso",
+    "UD": "Udine", "VA": "Varese", "VB": "Verbano-Cusio-Ossola",
+    "VC": "Vercelli", "VE": "Venezia", "VI": "Vicenza", "VR": "Verona",
+    "VT": "Viterbo", "VV": "Vibo Valentia",
+}
+
+GENDER_MAP = {"M": "Maschile", "F": "Femminile"}
+
+
+def format_birthday(raw: str) -> str:
+    """Convert DD/MM/YYYY to D/M/YYYY (strip leading zeros)."""
+    parts = raw.split("/")
+    if len(parts) == 3:
+        return f"{int(parts[0])}/{int(parts[1])}/{parts[2]}"
+    return raw
+
+
 class API:
     def __init__(self):
         self._window   = None
@@ -363,22 +413,84 @@ class API:
         except Exception:
             pass
 
-    async def _apply_field(self, page, selector, value, field_type):
+    def _resolve_value(self, col, row):
+        if col == "__username__":
+            email = str(row.get("Email", "") or row.get("email", "")).strip()
+            return generate_username(email)
+        if col == "__province__":
+            code = str(row.get("Province", "") or row.get("province", "")).strip().upper()
+            return PROVINCE_MAP.get(code, code)
+        if col == "__province_of_residence__":
+            code = str(row.get("Province of residence", "")).strip().upper()
+            return PROVINCE_MAP.get(code, code)
+        if col == "__birthday__":
+            raw = str(row.get("Birthday", "") or row.get("birthday", "")).strip()
+            return format_birthday(raw)
+        if col == "__gender__":
+            code = str(row.get("Gender", "") or row.get("gender", "")).strip().upper()
+            return GENDER_MAP.get(code, code)
+        if col == "__house_number__":
+            raw = str(row.get("House number", "")).strip()
+            return raw.split(" ")[0] if raw else ""
+        if col == "__security_question__":
+            return "Qual è il tuo secondo nome?"
+        if col == "__security_answer__":
+            return "abramo"
+        if col == "__spending_limit__":
+            return "€ 100.000"
+        return str(row.get(col, "")).strip()
+
+    async def _apply_field(self, page, selector, value, field_type, field_cfg=None):
         """Apply a single field action based on its type."""
         field_type = (field_type or "fill").lower()
         if field_type == "fill":
             await page.fill(selector, value)
         elif field_type == "check":
-            if value.lower() in ("true", "1", "yes", "si", "sì"):
+            if not value or value.lower() in ("true", "1", "yes", "si", "sì"):
                 await page.check(selector)
             else:
                 await page.uncheck(selector)
         elif field_type == "radio":
             await page.click(selector)
+        elif field_type == "radio_map":
+            smap = (field_cfg or {}).get("selector_map", {})
+            target = smap.get(value, "")
+            if target:
+                await page.click(target)
         elif field_type == "select":
             await page.select_option(selector, value)
         elif field_type == "click":
             await page.click(selector)
+        elif field_type == "click_first":
+            el = page.locator(selector).first
+            await el.scroll_into_view_if_needed()
+            await el.click()
+        elif field_type == "autocomplete":
+            await page.click(selector)
+            await page.fill(selector, "")
+            await page.type(selector, value, delay=50)
+            await page.wait_for_timeout(800)
+            dropdown = page.locator(f"{selector} ~ ul li, [role='listbox'] [role='option'], .autocomplete-suggestion, .suggestion-item, .MuiAutocomplete-option").first
+            try:
+                await dropdown.wait_for(state="visible", timeout=3000)
+                await dropdown.click()
+            except Exception:
+                await page.keyboard.press("ArrowDown")
+                await page.keyboard.press("Enter")
+        elif field_type == "date":
+            parts = value.split("/")
+            if len(parts) == 3:
+                d, m, y = int(parts[0]), int(parts[1]), int(parts[2])
+                fake_d = d + 1 if d < 28 else d - 1
+                fake = f"{fake_d}/{m}/{y}"
+            else:
+                fake = "1/1/2000"
+            await page.click(selector)
+            await page.fill(selector, fake)
+            await page.wait_for_timeout(500)
+            await page.fill(selector, "")
+            await page.fill(selector, value)
+            await page.wait_for_timeout(300)
         else:
             await page.fill(selector, value)
 
@@ -409,11 +521,19 @@ class API:
                         sel  = m.get("selector", "")
                         ftype = m.get("type", "fill")
 
-                        if ftype in ("radio", "click"):
+                        if ftype in ("radio", "click", "click_first"):
                             if sel:
                                 await self._apply_field(page, sel, "", ftype)
+                        elif ftype == "check":
+                            if sel:
+                                val = self._resolve_value(col, row) if col else ""
+                                await self._apply_field(page, sel, val, ftype)
+                        elif ftype == "radio_map":
+                            val = self._resolve_value(col, row) if col else ""
+                            if val:
+                                await self._apply_field(page, sel, val, ftype, m)
                         else:
-                            val = str(row.get(col, "")).strip()
+                            val = self._resolve_value(col, row)
                             if col and sel and val:
                                 await self._apply_field(page, sel, val, ftype)
 
@@ -429,12 +549,21 @@ class API:
                     col = m.get("csv_col", "")
                     sel = m.get("selector", "")
                     ftype = m.get("type", "fill")
-                    val = str(row.get(col, "")).strip()
-                    if ftype in ("radio", "click"):
+                    if ftype in ("radio", "click", "click_first"):
                         if sel:
                             await self._apply_field(page, sel, "", ftype)
-                    elif col and sel and val:
-                        await self._apply_field(page, sel, val, ftype)
+                    elif ftype == "check":
+                        if sel:
+                            val = self._resolve_value(col, row) if col else ""
+                            await self._apply_field(page, sel, val, ftype)
+                    elif ftype == "radio_map":
+                        val = self._resolve_value(col, row) if col else ""
+                        if val:
+                            await self._apply_field(page, sel, val, ftype, m)
+                    else:
+                        val = self._resolve_value(col, row)
+                        if col and sel and val:
+                            await self._apply_field(page, sel, val, ftype)
                 await page.click(settings.get("submit_selector", "button[type='submit']"))
 
             suc = settings.get("success_selector", "")
