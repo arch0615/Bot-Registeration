@@ -19,12 +19,14 @@ import webview
 from playwright.async_api import async_playwright
 from playwright.async_api import TimeoutError as PWTimeout
 
+from steps_config import REGISTRATION_STEPS
+
 SETTINGS_FILE    = Path(__file__).parent / "settings.json"
 UI_FILE          = Path(__file__).parent / "ui" / "index.html"
 GOLOGIN_API_BASE = "https://api.gologin.com"
 
 DEFAULT_SETTINGS = {
-    "registration_url":   "",
+    "registration_url":   "https://www.planetwin365.it/area-personale/registrati/",
     "profile_id_column":  "profile_name",
     "field_map":          [],
     "submit_selector":    "button[type='submit']",
@@ -35,7 +37,7 @@ DEFAULT_SETTINGS = {
     "gologin_port":       36912,
     "gologin_api_token":  "",
     "last_csv":           "",
-    "steps":              [],
+    "steps":              REGISTRATION_STEPS,
 }
 
 class _SkipStep(Exception):
@@ -203,7 +205,7 @@ class API:
         try:
             async with aiohttp.ClientSession() as sess:
                 async with sess.get(
-                    f"{GOLOGIN_API_BASE}/browser",
+                    f"{GOLOGIN_API_BASE}/browser/v2",
                     headers=headers,
                     timeout=aiohttp.ClientTimeout(total=20)
                 ) as r:

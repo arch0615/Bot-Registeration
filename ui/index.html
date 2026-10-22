@@ -64,8 +64,8 @@
   .sidebar-footer { padding: 12px 18px; font-size: 11px; color: rgba(255,255,255,.22); border-top: 1px solid rgba(255,255,255,.07); }
 
   /* ── Content ── */
-  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
-  .panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; padding: 24px 28px; gap: 16px; }
+  .content { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; }
+  .panel { display: flex; flex-direction: column; padding: 24px 28px; gap: 16px; }
 
   .panel-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; flex-shrink: 0; }
   .panel-title { font-size: 18px; font-weight: 600; letter-spacing: -.02em; }
@@ -213,7 +213,6 @@
     <div class="nav">
       <div class="nav-item active" data-panel="participants"><span class="nav-dot"></span>Participants</div>
       <div class="nav-item" data-panel="profiles"><span class="nav-dot"></span>GoLogin Profiles</div>
-      <div class="nav-item" data-panel="config"><span class="nav-dot"></span>Configuration</div>
       <div class="nav-item" data-panel="run"><span class="nav-dot"></span>Run</div>
     </div>
     <div class="sidebar-footer">GoLogin + Playwright</div>
@@ -304,106 +303,16 @@
       </div>
     </div>
 
-    <!-- ═══ Configuration ═══ -->
-    <div id="panel-config" class="panel" hidden>
-      <div class="panel-header">
-        <h1 class="panel-title">Configuration</h1>
-        <div class="panel-actions">
-          <button class="btn btn-primary" id="btnSaveConfig">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-            Save
-          </button>
-        </div>
-      </div>
-      <div class="config-scroll">
-        <div class="config-body">
-
-          <div class="field-group"><span class="section-title">Registration</span></div>
-
-          <div class="field-group">
-            <label class="field-label" for="cfgUrl">Registration URL</label>
-            <input class="field-inp" id="cfgUrl" type="url" placeholder="https://your-site.com/register">
-          </div>
-
-          <div class="inline-row">
-            <div class="field-group">
-              <label class="field-label" for="cfgSubmit">Submit Button Selector</label>
-              <input class="field-inp" id="cfgSubmit" type="text" placeholder="button[type='submit']">
-            </div>
-            <div class="field-group">
-              <label class="field-label" for="cfgSuccess">Success Selector (optional)</label>
-              <input class="field-inp" id="cfgSuccess" type="text" placeholder=".success-message">
-            </div>
-          </div>
-
-          <div class="field-group"><span class="section-title" style="margin-top:4px">Form Steps</span></div>
-          <div class="hint-box" style="margin-bottom:8px">
-            Define each page/step of the registration form. Each step has its own fields and a submit/next button. Field types: <strong>fill</strong> (text input), <strong>check</strong> (checkbox), <strong>radio</strong> (click a radio option), <strong>select</strong> (dropdown), <strong>click</strong> (generic click), <strong>click_first</strong> (click first matching element). Use <code>__username__</code> as CSV column to auto-generate username from email.
-          </div>
-          <div id="stepsList"></div>
-          <button class="btn" id="btnAddStep" style="margin-top:4px">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-            Add Step
-          </button>
-
-          <div class="field-group" style="margin-top:16px"><span class="section-title">Legacy Field Mapping (used if no steps defined)</span></div>
-          <div class="field-group">
-            <div class="fmap-cols">
-              <span class="fmap-col-label">CSV Column Name</span>
-              <span class="fmap-col-label">Form CSS Selector</span>
-              <span class="fmap-col-label">Type</span>
-              <span></span>
-            </div>
-            <div id="fmapList" style="display:flex;flex-direction:column;gap:6px"></div>
-            <button class="btn" id="btnAddMapping" style="align-self:flex-start;margin-top:4px">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              Add Field
-            </button>
-          </div>
-
-          <div class="field-group"><span class="section-title" style="margin-top:4px">GoLogin</span></div>
-
-          <div class="field-group">
-            <label class="field-label" for="cfgApiToken">API Token <span style="font-weight:400;text-transform:none">(GoLogin → Settings → API)</span></label>
-            <div class="token-wrap">
-              <input class="field-inp" id="cfgApiToken" type="password" placeholder="Paste token here — used to resolve profile names to IDs">
-              <button class="token-eye" id="cfgTokenEye" title="Show/hide">
-                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-              </button>
-            </div>
-          </div>
-
-          <div class="inline-row">
-            <div class="field-group">
-              <label class="field-label" for="cfgPidCol">Profile Column in CSV</label>
-              <input class="field-inp" id="cfgPidCol" type="text" placeholder="profile_name">
-            </div>
-            <div class="field-group">
-              <label class="field-label" for="cfgPort">GoLogin Port</label>
-              <input class="field-inp" id="cfgPort" type="number" placeholder="36912">
-            </div>
-          </div>
-
-          <div class="field-group"><span class="section-title" style="margin-top:4px">Timing</span></div>
-
-          <div class="inline-row">
-            <div class="field-group">
-              <label class="field-label" for="cfgBootWait">Profile Boot Wait (s)</label>
-              <input class="field-inp" id="cfgBootWait" type="number" placeholder="3">
-            </div>
-            <div class="field-group">
-              <label class="field-label" for="cfgDelay">Delay Between Runs (s)</label>
-              <input class="field-inp" id="cfgDelay" type="number" placeholder="2">
-            </div>
-            <div class="field-group">
-              <label class="field-label" for="cfgTimeout">Success Timeout (s)</label>
-              <input class="field-inp" id="cfgTimeout" type="number" placeholder="15">
-            </div>
-          </div>
-
-        </div>
-      </div>
-    </div>
+    <!-- Hidden config fields (values managed by GoLogin panel & defaults) -->
+    <input type="hidden" id="cfgUrl" value="https://www.planetwin365.it/area-personale/registrati/">
+    <input type="hidden" id="cfgSubmit" value="button[type='submit']">
+    <input type="hidden" id="cfgSuccess" value="">
+    <input type="hidden" id="cfgApiToken" value="">
+    <input type="hidden" id="cfgPidCol" value="profile_name">
+    <input type="hidden" id="cfgPort" value="36912">
+    <input type="hidden" id="cfgBootWait" value="3">
+    <input type="hidden" id="cfgDelay" value="2">
+    <input type="hidden" id="cfgTimeout" value="15">
 
     <!-- ═══ Run ═══ -->
     <div id="panel-run" class="panel" hidden>
@@ -628,19 +537,10 @@ function makeEyeToggle(eyeId, inputId) {
   });
 }
 makeEyeToggle('tokenEye', 'profilesToken');
-makeEyeToggle('cfgTokenEye', 'cfgApiToken');
-
-// Keep tokens in sync between panels
-document.getElementById('profilesToken').addEventListener('input', e => {
-  document.getElementById('cfgApiToken').value = e.target.value;
-});
-document.getElementById('cfgApiToken').addEventListener('input', e => {
-  document.getElementById('profilesToken').value = e.target.value;
-});
 
 // ── Configuration ──────────────────────────────────────────────────
 function applySettingsToForm(s) {
-  document.getElementById('cfgUrl').value      = s.registration_url   || '';
+  document.getElementById('cfgUrl').value      = s.registration_url   || 'https://www.planetwin365.it/area-personale/registrati/';
   document.getElementById('cfgSubmit').value   = s.submit_selector    || "button[type='submit']";
   document.getElementById('cfgSuccess').value  = s.success_selector   || '';
   document.getElementById('cfgApiToken').value = s.gologin_api_token  || '';
@@ -649,117 +549,12 @@ function applySettingsToForm(s) {
   document.getElementById('cfgBootWait').value = s.profile_boot_wait  || 3;
   document.getElementById('cfgDelay').value    = s.delay_between_runs || 2;
   document.getElementById('cfgTimeout').value  = s.success_timeout    || 15;
-  renderFieldMap(s.field_map || []);
-  renderSteps(s.steps || []);
+  document.getElementById('profilesToken').value = s.gologin_api_token || '';
 }
 
-function renderFieldMap(fieldMap) {
-  const list = document.getElementById('fmapList'); list.innerHTML = '';
-  fieldMap.forEach((m, i) => {
-    const row = document.createElement('div'); row.className = 'fmap-row';
-    const col = document.createElement('input'); col.className = 'field-inp'; col.placeholder = 'e.g. email'; col.value = m.csv_col || '';
-    const sel = document.createElement('input'); sel.className = 'field-inp'; sel.placeholder = 'e.g. #email'; sel.value = m.selector || '';
-    const typ = document.createElement('select'); typ.className = 'type-select';
-    ['fill','check','radio','radio_map','select','mat_select','click','click_first','autocomplete','date'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
-    typ.value = m.type || 'fill';
-    const del = document.createElement('button'); del.className = 'fmap-del'; del.type = 'button';
-    del.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-    del.addEventListener('click', () => { state.settings.field_map.splice(i, 1); renderFieldMap(state.settings.field_map); });
-    col.addEventListener('input', () => { state.settings.field_map[i].csv_col  = col.value; });
-    sel.addEventListener('input', () => { state.settings.field_map[i].selector = sel.value; });
-    typ.addEventListener('change', () => { state.settings.field_map[i].type = typ.value; });
-    row.append(col, sel, typ, del); list.appendChild(row);
-  });
-}
-
-document.getElementById('btnAddMapping').addEventListener('click', () => {
-  if (!state.settings.field_map) state.settings.field_map = [];
-  state.settings.field_map.push({ csv_col: '', selector: '', type: 'fill' });
-  renderFieldMap(state.settings.field_map);
-});
-
-// ── Steps ─────────────────────────────────────────────────────────
-function renderSteps(steps) {
-  const list = document.getElementById('stepsList'); list.innerHTML = '';
-  steps.forEach((step, si) => {
-    const card = document.createElement('div'); card.className = 'step-card';
-
-    const header = document.createElement('div'); header.className = 'step-header';
-    const nameInp = document.createElement('input'); nameInp.className = 'step-title-inp';
-    nameInp.value = step.name || `Step ${si+1}`; nameInp.placeholder = 'Step name';
-    nameInp.addEventListener('input', () => { state.settings.steps[si].name = nameInp.value; });
-    const delStep = document.createElement('button'); delStep.className = 'btn btn-danger btn-sm'; delStep.textContent = 'Remove Step';
-    delStep.addEventListener('click', () => { state.settings.steps.splice(si, 1); renderSteps(state.settings.steps); });
-    header.append(nameInp, delStep);
-
-    const colHeaders = document.createElement('div'); colHeaders.className = 'fmap-cols';
-    colHeaders.innerHTML = '<span class="fmap-col-label">CSV Column</span><span class="fmap-col-label">CSS Selector</span><span class="fmap-col-label">Type</span><span></span>';
-
-    const fieldsWrap = document.createElement('div'); fieldsWrap.style.cssText = 'display:flex;flex-direction:column;gap:6px';
-    (step.fields || []).forEach((f, fi) => {
-      const row = document.createElement('div'); row.className = 'fmap-row';
-      const col = document.createElement('input'); col.className = 'field-inp'; col.placeholder = 'e.g. username'; col.value = f.csv_col || '';
-      const sel = document.createElement('input'); sel.className = 'field-inp'; sel.placeholder = 'e.g. #username'; sel.value = f.selector || '';
-      const typ = document.createElement('select'); typ.className = 'type-select';
-      ['fill','check','radio','radio_map','select','mat_select','click','click_first','autocomplete','date'].forEach(t => { const o = document.createElement('option'); o.value = t; o.textContent = t; typ.appendChild(o); });
-      typ.value = f.type || 'fill';
-      const del = document.createElement('button'); del.className = 'fmap-del'; del.type = 'button';
-      del.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-      del.addEventListener('click', () => { state.settings.steps[si].fields.splice(fi, 1); renderSteps(state.settings.steps); });
-      col.addEventListener('input', () => { state.settings.steps[si].fields[fi].csv_col = col.value; });
-      sel.addEventListener('input', () => { state.settings.steps[si].fields[fi].selector = sel.value; });
-      typ.addEventListener('change', () => { state.settings.steps[si].fields[fi].type = typ.value; });
-      row.append(col, sel, typ, del); fieldsWrap.appendChild(row);
-    });
-
-    const addFieldBtn = document.createElement('button'); addFieldBtn.className = 'btn btn-sm'; addFieldBtn.style.marginTop = '6px';
-    addFieldBtn.innerHTML = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add Field';
-    addFieldBtn.addEventListener('click', () => {
-      if (!state.settings.steps[si].fields) state.settings.steps[si].fields = [];
-      state.settings.steps[si].fields.push({ csv_col: '', selector: '', type: 'fill' });
-      renderSteps(state.settings.steps);
-    });
-
-    const submitRow = document.createElement('div'); submitRow.className = 'step-submit-row';
-    const submitLabel = document.createElement('span'); submitLabel.className = 'fmap-col-label'; submitLabel.textContent = 'Submit / Next Button:'; submitLabel.style.whiteSpace = 'nowrap';
-    const submitInp = document.createElement('input'); submitInp.className = 'field-inp'; submitInp.placeholder = "button[type='submit']";
-    submitInp.value = step.submit_selector || '';
-    submitInp.addEventListener('input', () => { state.settings.steps[si].submit_selector = submitInp.value; });
-    const waitLabel = document.createElement('span'); waitLabel.className = 'fmap-col-label'; waitLabel.textContent = 'Wait for:'; waitLabel.style.whiteSpace = 'nowrap';
-    const waitInp = document.createElement('input'); waitInp.className = 'field-inp'; waitInp.placeholder = 'Selector to wait after click (optional)';
-    waitInp.value = step.wait_after || '';
-    waitInp.addEventListener('input', () => { state.settings.steps[si].wait_after = waitInp.value; });
-    submitRow.append(submitLabel, submitInp, waitLabel, waitInp);
-
-    card.append(header, colHeaders, fieldsWrap, addFieldBtn, submitRow);
-    list.appendChild(card);
-  });
-}
-
-document.getElementById('btnAddStep').addEventListener('click', () => {
-  if (!state.settings.steps) state.settings.steps = [];
-  state.settings.steps.push({ name: `Step ${state.settings.steps.length + 1}`, fields: [], submit_selector: '', wait_after: '' });
-  renderSteps(state.settings.steps);
-});
-
-document.getElementById('btnSaveConfig').addEventListener('click', async () => {
-  const s = {
-    ...state.settings,
-    registration_url:   document.getElementById('cfgUrl').value.trim(),
-    submit_selector:    document.getElementById('cfgSubmit').value.trim(),
-    success_selector:   document.getElementById('cfgSuccess').value.trim(),
-    gologin_api_token:  document.getElementById('cfgApiToken').value.trim(),
-    profile_id_column:  document.getElementById('cfgPidCol').value.trim() || 'profile_name',
-    gologin_port:       parseInt(document.getElementById('cfgPort').value) || 36912,
-    profile_boot_wait:  parseInt(document.getElementById('cfgBootWait').value) || 3,
-    delay_between_runs: parseInt(document.getElementById('cfgDelay').value) || 2,
-    success_timeout:    parseInt(document.getElementById('cfgTimeout').value) || 15,
-    steps:              state.settings.steps || [],
-  };
-  state.settings = s;
-  document.getElementById('profilesToken').value = s.gologin_api_token;
-  await api('save_settings', s);
-  showStatus('Configuration saved');
+// Sync GoLogin token between profiles panel and hidden config field
+document.getElementById('profilesToken').addEventListener('input', e => {
+  document.getElementById('cfgApiToken').value = e.target.value;
 });
 
 // ── Run panel ──────────────────────────────────────────────────────
