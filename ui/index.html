@@ -296,6 +296,18 @@
         The token is used to read your profile list — your password is never stored or sent.
       </div>
 
+      <div class="field-group" style="margin-top:8px">
+        <label class="field-label">Profile Assignment Mode</label>
+        <div style="display:flex;gap:12px;align-items:center;margin-top:4px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+            <input type="radio" name="profileMode" value="auto" id="modeAuto" checked> <strong>Automatic</strong> — assign loaded profiles to rows in order
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
+            <input type="radio" name="profileMode" value="manual" id="modeManual"> <strong>Manual</strong> — use <code>profile_name</code> column from CSV
+          </label>
+        </div>
+      </div>
+
       <div class="profiles-table-wrap">
         <div id="profilesContent">
           <div class="profiles-empty">Enter your API token above and click Load.</div>
@@ -303,8 +315,7 @@
       </div>
     </div>
 
-    <!-- Hidden config fields (values managed by GoLogin panel & defaults) -->
-    <input type="hidden" id="cfgUrl" value="https://www.planetwin365.it/area-personale/registrati/">
+    <!-- Hidden config fields -->
     <input type="hidden" id="cfgSubmit" value="button[type='submit']">
     <input type="hidden" id="cfgSuccess" value="">
     <input type="hidden" id="cfgApiToken" value="">
@@ -324,6 +335,11 @@
             Export Results
           </button>
         </div>
+      </div>
+
+      <div class="field-group" style="margin-bottom:8px">
+        <label class="field-label" for="cfgUrl">Registration URL</label>
+        <input class="field-inp" id="cfgUrl" type="url" value="https://www.planetwin365.it/area-personale/registrati/" placeholder="https://example.com/register">
       </div>
 
       <div class="run-grid">
@@ -384,7 +400,10 @@ document.querySelectorAll('.nav-item').forEach(item => {
     item.classList.add('active');
     document.querySelectorAll('.panel').forEach(p => { p.hidden = true; });
     document.getElementById('panel-' + item.dataset.panel).hidden = false;
-    if (item.dataset.panel === 'run') updateRunStat();
+    if (item.dataset.panel === 'run') {
+      updateRunStat();
+      setTimeout(() => document.getElementById('btnStart').scrollIntoView({ behavior: 'smooth', block: 'center' }), 100);
+    }
   });
 });
 
@@ -550,6 +569,9 @@ function applySettingsToForm(s) {
   document.getElementById('cfgDelay').value    = s.delay_between_runs || 2;
   document.getElementById('cfgTimeout').value  = s.success_timeout    || 15;
   document.getElementById('profilesToken').value = s.gologin_api_token || '';
+  const mode = s.profile_mode || 'auto';
+  const radio = document.getElementById(mode === 'manual' ? 'modeManual' : 'modeAuto');
+  if (radio) radio.checked = true;
 }
 
 // Sync GoLogin token between profiles panel and hidden config field
@@ -572,6 +594,7 @@ function collectSettings() {
     profile_boot_wait:  parseInt(document.getElementById('cfgBootWait').value) || 3,
     delay_between_runs: parseInt(document.getElementById('cfgDelay').value) || 2,
     success_timeout:    parseInt(document.getElementById('cfgTimeout').value) || 15,
+    profile_mode:       document.querySelector('input[name="profileMode"]:checked').value,
   };
 }
 
@@ -605,9 +628,27 @@ window.__botEvent = function(raw) {
     case 'progress':  setProgress(data.i, data.total, data.label); break;
     case 'log':       addLog(data.lvl, data.msg); break;
     case 'row_done':  if (data.status === 'OK') { const el = document.getElementById('statOk'); el.textContent = (parseInt(el.textContent) || 0) + 1; } break;
+    case 'update_row': updateTableCell(data.email, data.field, data.value); break;
     case 'finished':  onFinished(data); break;
   }
 };
+
+function updateTableCell(email, field, value) {
+  const headers = Array.from(document.querySelectorAll('#thead th .header-inp')).map(inp => inp.value);
+  const emailIdx = headers.indexOf('Email');
+  const fieldIdx = headers.indexOf(field);
+  if (emailIdx < 0 || fieldIdx < 0) return;
+  const rows = document.querySelectorAll('#tbody tr');
+  for (const tr of rows) {
+    const cells = tr.querySelectorAll('.cell-inp');
+    if (cells[emailIdx] && cells[emailIdx].value === email) {
+      cells[fieldIdx].value = value;
+      const ri = tr.rowIndex - 1;
+      if (ri >= 0 && ri < state.rows.length) state.rows[ri][field] = value;
+      break;
+    }
+  }
+}
 
 function addLog(lvl, msg) {
   const log = document.getElementById('logWrap');

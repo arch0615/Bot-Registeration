@@ -4,6 +4,22 @@ Import and assign to settings["steps"] to use.
 """
 
 REGISTRATION_STEPS = [
+    # ── Page 1: Tax ID (Codice Fiscale) ─────────────────────────────
+    {
+        "name": "Page 1 - Tax ID",
+        "fields": [
+            {"csv_col": "Tax ID", "selector": "#codiceFiscale", "type": "fill"},
+        ],
+        "submit_selector": "button:has-text('AVANTI')",
+        "wait_after": "",
+    },
+    # ── Page 2: Registration Button ────────────────────────────────
+    {
+        "name": "Page 2 - Register",
+        "fields": [],
+        "submit_selector": "button:has-text('REGISTRATI')",
+        "wait_after": "",
+    },
     # ── Page 3: Credentials ──────────────────────────────────────────
     {
         "name": "Page 3 - Credentials",
@@ -91,9 +107,9 @@ REGISTRATION_STEPS = [
     {
         "name": "Page 10 - Terms",
         "fields": [
-            {"csv_col": "", "selector": "mat-checkbox#mat-mdc-checkbox-gadplatform7",  "type": "check"},
-            {"csv_col": "", "selector": "mat-radio-button#mat-radio-gadplatform21",     "type": "radio"},
-            {"csv_col": "", "selector": "mat-checkbox#mat-mdc-checkbox-gadplatform8",  "type": "check"},
+            {"csv_col": "", "selector": "mat-checkbox[formcontrolname='accettaContratto']",  "type": "check"},
+            {"csv_col": "", "selector": "mat-radio-group[formcontrolname='comunicazioniInformative'] mat-radio-button:first-child", "type": "radio"},
+            {"csv_col": "", "selector": "mat-checkbox[formcontrolname='trattamentoDati']", "type": "check"},
         ],
         "submit_selector": "div.registrati-btn-container button",
         "wait_after": "",

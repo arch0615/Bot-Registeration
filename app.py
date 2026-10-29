@@ -11,11 +11,13 @@ import random
 import re
 import sys
 import threading
+import traceback
 from datetime import datetime
 from pathlib import Path
 
 import aiohttp
 import webview
+from gologin import GoLogin
 from playwright.async_api import async_playwright
 from playwright.async_api import TimeoutError as PWTimeout
 
@@ -38,6 +40,7 @@ DEFAULT_SETTINGS = {
     "gologin_api_token":  "",
     "last_csv":           "",
     "steps":              REGISTRATION_STEPS,
+    "profile_mode":       "auto",
 }
 
 class _SkipStep(Exception):
@@ -50,9 +53,11 @@ UUID_RE = re.compile(
 
 def generate_username(email: str) -> str:
     prefix = email.split("@")[0] if "@" in email else email
-    username = re.sub(r'[^a-zA-Z0-9]', '', prefix)
-    if len(username) < 6:
-        username = username.ljust(6, '0')
+    base = re.sub(r'[^a-zA-Z0-9]', '', prefix)
+    if len(base) < 4:
+        base = base.ljust(4, '0')
+    suffix = str(random.randint(100, 9999))
+    username = base[:14 - len(suffix)] + suffix
     return username[:14]
 
 
@@ -109,13 +114,18 @@ class API:
 
     # ── Settings ─────────────────────────────────────────────────────
     def load_settings(self):
+        s = dict(DEFAULT_SETTINGS)
         if SETTINGS_FILE.exists():
             try:
                 with open(SETTINGS_FILE) as f:
-                    return {**DEFAULT_SETTINGS, **json.load(f)}
+                    saved = json.load(f)
+                s.update(saved)
             except Exception:
                 pass
-        return dict(DEFAULT_SETTINGS)
+        s["steps"] = REGISTRATION_STEPS
+        if not s.get("registration_url"):
+            s["registration_url"] = DEFAULT_SETTINGS["registration_url"]
+        return s
 
     def save_settings(self, data):
         try:
@@ -287,6 +297,14 @@ class API:
 
     # ── Internals ─────────────────────────────────────────────────────
     def _emit(self, event, data=None):
+        if event == "log" and data:
+            lvl = data.get("lvl", "info").upper()
+            msg = data.get("msg", "")
+            print(f"[{lvl}] {msg}", flush=True)
+        elif event == "row_done" and data:
+            print(f"[ROW_DONE] {data.get('label','')} → {data.get('status','')}", flush=True)
+        elif event in ("started", "finished", "progress"):
+            print(f"[{event.upper()}] {data}", flush=True)
         payload = json.dumps({"event": event, "data": data}, default=str)
         escaped = (payload
                    .replace("\\", "\\\\")
@@ -299,6 +317,9 @@ class API:
         asyncio.set_event_loop(loop)
         try:
             loop.run_until_complete(self._bot(settings, rows))
+        except Exception as e:
+            print(f"[FATAL] Bot thread crashed: {e}", flush=True)
+            traceback.print_exc()
         finally:
             loop.close()
 
@@ -306,16 +327,16 @@ class API:
         self._running = True
         total     = len(rows)
         ok_count  = 0
-        port      = settings.get("gologin_port", 36912)
-        base      = f"http://localhost:{port}"
         pid_col   = settings.get("profile_id_column", "profile_name")
         field_map = settings.get("field_map", [])
         token     = settings.get("gologin_api_token", "").strip()
+        auto_mode = settings.get("profile_mode", "auto") == "auto"
 
         self._emit("started", {"total": total})
 
-        # Build name→UUID map if API token is available
+        # Load profiles from GoLogin API
         name_to_id = {}
+        profile_list = []
         if token:
             self._emit("log", {"lvl": "info", "msg": "Loading GoLogin profile list…"})
             result = await self._fetch_profiles(token)
@@ -323,22 +344,42 @@ class API:
                 for p in result["profiles"]:
                     name_to_id[p["name"]]       = p["id"]
                     name_to_id[p["name"].strip()] = p["id"]
-                self._emit("log", {"lvl": "info", "msg": f"  {len(name_to_id)//2} profiles loaded."})
+                    profile_list.append(p)
+                self._emit("log", {"lvl": "info", "msg": f"  {len(profile_list)} profiles loaded."})
             else:
                 self._emit("log", {"lvl": "warn", "msg": f"  Could not load profiles: {result.get('error')}"})
 
-        async with aiohttp.ClientSession() as sess:
-            async with async_playwright() as pw:
-                for i, row in enumerate(rows):
-                    if self._stop:
-                        self._emit("log", {"lvl": "warn", "msg": "Stopped by user."})
-                        break
+        if auto_mode and not profile_list:
+            self._emit("log", {"lvl": "error", "msg": "Auto mode requires profiles — load your GoLogin API token first."})
+            self._running = False
+            self._emit("finished", {"ok": 0, "total": total, "results": []})
+            return
 
+        if auto_mode and len(profile_list) < total:
+            self._emit("log", {"lvl": "warn", "msg": f"  ⚠ Only {len(profile_list)} profiles for {total} rows — extra rows will be skipped."})
+
+        async with async_playwright() as pw:
+            for i, row in enumerate(rows):
+                if self._stop:
+                    self._emit("log", {"lvl": "warn", "msg": "Stopped by user."})
+                    break
+
+                label = row.get("email") or row.get("username") or row.get("Email") or f"Row {i+1}"
+
+                self._emit("progress", {"i": i, "total": total, "label": label})
+                self._emit("log", {"lvl": "info", "msg": f"[{i+1}/{total}] {label}"})
+
+                if auto_mode:
+                    if i >= len(profile_list):
+                        msg = "No more profiles available"
+                        self._results.append({**row, "bot_status": "SKIP", "bot_message": msg})
+                        self._emit("log",      {"lvl": "warn", "msg": f"  ⚠ {msg}"})
+                        self._emit("row_done", {"i": i, "status": "SKIP", "label": label})
+                        continue
+                    pid = profile_list[i]["id"]
+                    self._emit("log", {"lvl": "info", "msg": f"  Auto-assigned profile: {profile_list[i]['name']} ({pid[:8]}…)"})
+                else:
                     raw_pid = str(row.get(pid_col, "")).strip()
-                    label   = row.get("email") or row.get("username") or f"Row {i+1}"
-
-                    self._emit("progress", {"i": i, "total": total, "label": label})
-                    self._emit("log", {"lvl": "info", "msg": f"[{i+1}/{total}] {label}"})
 
                     if not raw_pid:
                         msg = f"No value in '{pid_col}' column"
@@ -347,7 +388,6 @@ class API:
                         self._emit("row_done", {"i": i, "status": "SKIP", "label": label})
                         continue
 
-                    # Resolve name → UUID if needed
                     if UUID_RE.match(raw_pid):
                         pid = raw_pid
                     elif raw_pid in name_to_id:
@@ -356,38 +396,41 @@ class API:
                     else:
                         msg = (
                             f"Profile '{raw_pid}' not found. "
-                            "Add your GoLogin API token in Configuration to resolve names."
+                            "Check your GoLogin API token and profile names."
                         )
                         self._results.append({**row, "bot_status": "FAIL", "bot_message": msg})
                         self._emit("log",      {"lvl": "error", "msg": f"  ✗ {msg}"})
                         self._emit("row_done", {"i": i, "status": "FAIL", "label": label})
                         continue
 
-                    ws = await self._start_profile(sess, base, pid)
-                    if not ws:
-                        msg = "GoLogin profile failed to start"
-                        self._results.append({**row, "bot_status": "FAIL", "bot_message": msg})
-                        self._emit("log",      {"lvl": "error", "msg": f"  ✗ {msg}"})
-                        self._emit("row_done", {"i": i, "status": "FAIL", "label": label})
-                        continue
+                self._emit("log", {"lvl": "info", "msg": "  Starting GoLogin profile…"})
+                ws = await self._start_profile(token, pid)
+                if not ws:
+                    msg = "GoLogin profile failed to start"
+                    self._results.append({**row, "bot_status": "FAIL", "bot_message": msg})
+                    self._emit("log",      {"lvl": "error", "msg": f"  ✗ {msg}"})
+                    self._emit("row_done", {"i": i, "status": "FAIL", "label": label})
+                    continue
 
-                    self._emit("log", {"lvl": "info", "msg": "  Profile started, connecting…"})
-                    await asyncio.sleep(settings.get("profile_boot_wait", 3))
+                self._emit("log", {"lvl": "info", "msg": "  Profile started, connecting…"})
+                await asyncio.sleep(settings.get("profile_boot_wait", 5))
 
-                    ok, msg = await self._fill(pw, ws, row, settings, field_map)
-                    await self._stop_profile(sess, base, pid)
+                ok, msg = await self._fill(pw, ws, row, settings, field_map)
+                await self._stop_profile()
 
-                    status = "OK" if ok else "FAIL"
-                    icon   = "✓" if ok else "✗"
-                    lvl    = "ok" if ok else "error"
-                    self._results.append({**row, "bot_status": status, "bot_message": msg})
-                    self._emit("log",      {"lvl": lvl,  "msg": f"  {icon} {msg}"})
-                    self._emit("row_done", {"i": i, "status": status, "label": label})
-                    if ok:
-                        ok_count += 1
+                status = "OK" if ok else "FAIL"
+                icon   = "✓" if ok else "✗"
+                lvl    = "ok" if ok else "error"
+                self._results.append({**row, "bot_status": status, "bot_message": msg})
+                self._emit("log",      {"lvl": lvl,  "msg": f"  {icon} {msg}"})
+                self._emit("row_done", {"i": i, "status": status, "label": label})
+                if ok:
+                    ok_count += 1
 
-                    if i < total - 1 and not self._stop:
-                        await asyncio.sleep(settings.get("delay_between_runs", 2))
+                if i < total - 1 and not self._stop:
+                    wait = max(settings.get("delay_between_runs", 2), 5)
+                    self._emit("log", {"lvl": "info", "msg": f"  Waiting {wait}s before next profile…"})
+                    await asyncio.sleep(wait)
 
         self._running = False
         self._emit("finished", {
@@ -396,33 +439,79 @@ class API:
             "results": self._results,
         })
 
-    async def _start_profile(self, sess, base, pid):
+    def _create_gl(self, token, pid):
+        return GoLogin({
+            "token": token,
+            "profile_id": pid,
+            "extra_params": [
+                "--disable-backgrounding-occluded-windows",
+                "--disable-renderer-backgrounding",
+                "--disable-background-timer-throttling",
+            ],
+        })
+
+    async def _start_profile(self, token, pid):
+        loop = asyncio.get_event_loop()
         try:
-            async with sess.get(
-                f"{base}/browser/{pid}/start?return_url=true",
-                timeout=aiohttp.ClientTimeout(total=30)
-            ) as r:
-                if r.status != 200:
-                    return None
-                d = await r.json(content_type=None)
-                return d.get("wsUrl") or d.get("ws")
-        except Exception:
+            gl = self._create_gl(token, pid)
+            ws = await loop.run_in_executor(None, gl.start)
+            self._current_gl = gl
+            print(f"[DEBUG] gl.start() returned: {repr(ws)}", flush=True)
+            ws_str = str(ws) if ws else ""
+            if ws_str.startswith("ws://") or ws_str.startswith("wss://"):
+                return ws_str
+            # Browser not ready yet — poll the debug endpoint
+            port = getattr(gl, 'port', None)
+            if not port:
+                port_match = re.search(r'(\d{4,5})', ws_str)
+                if port_match:
+                    port = int(port_match.group(1))
+            if not port:
+                self._emit("log", {"lvl": "error", "msg": "    Cannot determine browser port"})
+                return None
+            self._emit("log", {"lvl": "info", "msg": f"    Waiting for browser to be ready (port {port})…"})
+            for attempt in range(20):
+                await asyncio.sleep(2)
+                try:
+                    async with aiohttp.ClientSession() as s:
+                        async with s.get(
+                            f"http://127.0.0.1:{port}/json/version",
+                            timeout=aiohttp.ClientTimeout(total=3)
+                        ) as r:
+                            if r.status == 200:
+                                data = await r.json(content_type=None)
+                                ws = data.get("webSocketDebuggerUrl", "")
+                                if ws:
+                                    self._emit("log", {"lvl": "info", "msg": f"    Browser ready after {(attempt+1)*2}s"})
+                                    return ws
+                except Exception:
+                    pass
+            self._emit("log", {"lvl": "error", "msg": "    Browser never became ready"})
+            return None
+        except Exception as e:
+            self._emit("log", {"lvl": "error", "msg": f"    Start error: {e}"})
+            self._current_gl = None
             return None
 
-    async def _stop_profile(self, sess, base, pid):
-        try:
-            async with sess.get(
-                f"{base}/browser/{pid}/stop",
-                timeout=aiohttp.ClientTimeout(total=15)
-            ):
-                pass
-        except Exception:
-            pass
+    async def _stop_profile(self):
+        gl = getattr(self, '_current_gl', None)
+        if gl:
+            print("[INFO] Stopping GoLogin profile…", flush=True)
+            loop = asyncio.get_event_loop()
+            try:
+                await loop.run_in_executor(None, gl.stop)
+                print("[INFO] GoLogin profile stopped.", flush=True)
+            except Exception as e:
+                print(f"[WARN] Error stopping profile: {e}", flush=True)
+            self._current_gl = None
 
     def _resolve_value(self, col, row):
         if col == "__username__":
             email = str(row.get("Email", "") or row.get("email", "")).strip()
-            return generate_username(email)
+            username = generate_username(email)
+            row["Username"] = username
+            self._emit("update_row", {"email": email, "field": "Username", "value": username})
+            return username
         if col == "__province__":
             code = str(row.get("Province", "") or row.get("province", "")).strip().upper()
             return PROVINCE_MAP.get(code, code)
@@ -444,11 +533,26 @@ class API:
             return "abramo"
         if col == "__spending_limit__":
             return "€ 100.000"
+        if col == "__document_type__":
+            raw = str(row.get("Document type", "")).strip()
+            return raw or "Carta d'identità elettronica"
+        if col == "__issuing_body__":
+            raw = str(row.get("Issuing body", "")).strip()
+            return raw or "Comune"
+        if col == "__issue_date__":
+            raw = str(row.get("Issue date", "") or row.get("issue_date", "")).strip()
+            return format_birthday(raw)
+        if col == "__expiration_date__":
+            raw = str(row.get("Expiration date", "") or row.get("expiration_date", "")).strip()
+            return format_birthday(raw)
         return str(row.get(col, "")).strip()
 
     CURSOR_INJECT_JS = """
     (() => {
         if (document.getElementById('__bot_cursor')) return;
+        const style = document.createElement('style');
+        style.textContent = '*, *::before, *::after { cursor: none !important; }';
+        document.head.appendChild(style);
         const cur = document.createElement('div');
         cur.id = '__bot_cursor';
         cur.style.cssText = `
@@ -490,11 +594,16 @@ class API:
 
     async def _human_type(self, page, selector, value):
         """Type text character by character with random human-like delays."""
-        await page.click(selector)
-        await page.fill(selector, "")
+        el = page.locator(selector).first
+        await el.click()
+        await el.press("Control+a")
+        await page.keyboard.press("Backspace")
+        await asyncio.sleep(random.uniform(0.1, 0.3))
         for ch in value:
             await page.keyboard.type(ch)
             await asyncio.sleep(random.uniform(0.05, 0.18))
+        await page.keyboard.press("Tab")
+        await asyncio.sleep(random.uniform(0.1, 0.3))
 
     async def _random_pause(self, short=False):
         """Random pause to break robotic timing patterns."""
@@ -508,15 +617,33 @@ class API:
         field_type = (field_type or "fill").lower()
         await self._inject_cursor(page)
         if selector:
+            try:
+                el = page.locator(selector).first
+                await el.scroll_into_view_if_needed(timeout=3000)
+            except Exception:
+                pass
             await self._move_to_element(page, selector)
         await self._random_pause(short=True)
         if field_type == "fill":
             await self._human_type(page, selector, value)
         elif field_type == "check":
-            if not value or value.lower() in ("true", "1", "yes", "si", "sì"):
-                await page.check(selector)
-            else:
-                await page.uncheck(selector)
+            el = page.locator(selector).first
+            label = el.locator("label").first
+            should_check = not value or value.lower() in ("true", "1", "yes", "si", "sì")
+            try:
+                is_checked = await el.evaluate("e => e.classList.contains('mat-mdc-checkbox-checked') || !!e.querySelector('input:checked')")
+            except Exception:
+                is_checked = False
+            if should_check and not is_checked:
+                try:
+                    await label.click(timeout=3000)
+                except Exception:
+                    await el.click()
+            elif not should_check and is_checked:
+                try:
+                    await label.click(timeout=3000)
+                except Exception:
+                    await el.click()
         elif field_type == "radio":
             await page.click(selector)
         elif field_type == "radio_map":
@@ -582,14 +709,16 @@ class API:
     async def _fill(self, pw, ws, row, settings, field_map):
         browser = None
         try:
+            print(f"[DEBUG] Connecting to CDP: {ws}", flush=True)
             browser = await pw.chromium.connect_over_cdp(ws)
             ctx  = browser.contexts[0] if browser.contexts else await browser.new_context()
-            page = await ctx.new_page()
-            await page.goto(
-                settings["registration_url"],
-                wait_until="domcontentloaded",
-                timeout=30_000
-            )
+            page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            page.on("close", lambda: print("[WARN] Page was closed!", flush=True))
+            page.on("crash", lambda: print("[WARN] Page crashed!", flush=True))
+            browser.on("disconnected", lambda: print("[WARN] Browser disconnected!", flush=True))
+            url = settings["registration_url"]
+            self._emit("log", {"lvl": "info", "msg": f"    Navigating to {url}"})
+            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             await self._inject_cursor(page)
             await self._random_pause()
 
@@ -621,23 +750,40 @@ class API:
                                     raise _SkipStep()
 
                             if ftype in ("radio", "click", "click_first"):
+                                self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {sel[:60]}"})
                                 await self._apply_field(page, sel, "", ftype)
                             elif ftype == "check":
                                 val = self._resolve_value(col, row) if col else ""
+                                self._emit("log", {"lvl": "info", "msg": f"    check: {sel[:60]}"})
                                 await self._apply_field(page, sel, val, ftype)
                             elif ftype == "radio_map":
                                 val = self._resolve_value(col, row) if col else ""
                                 if val:
+                                    self._emit("log", {"lvl": "info", "msg": f"    radio_map: {val} → {sel[:60]}"})
                                     await self._apply_field(page, sel, val, ftype, m)
                             else:
                                 val = self._resolve_value(col, row)
                                 if col and sel and val:
+                                    self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {col} → {sel[:50]} = {val[:30]}"})
                                     await self._apply_field(page, sel, val, ftype)
 
                         if step_submit:
                             await self._random_pause()
+                            btn = page.locator(step_submit).first
+                            try:
+                                await btn.scroll_into_view_if_needed(timeout=3000)
+                            except Exception:
+                                pass
+                            # Wait for button to become enabled
+                            for _wait in range(15):
+                                if await btn.is_enabled():
+                                    break
+                                self._emit("log", {"lvl": "info", "msg": f"    Waiting for submit button to enable… ({_wait+1})"})
+                                await asyncio.sleep(1)
+                            else:
+                                self._emit("log", {"lvl": "warn", "msg": f"    Submit button still disabled after 15s"})
                             await self._move_to_element(page, step_submit)
-                            await page.click(step_submit)
+                            await btn.click(timeout=15_000)
                             if wait_sel:
                                 await page.wait_for_selector(wait_sel, timeout=15_000)
                             else:
@@ -656,11 +802,7 @@ class API:
                     pass
 
                 self._emit("log", {"lvl": "info", "msg": "  Navigating back to page 1"})
-                await page.goto(
-                    settings["registration_url"],
-                    wait_until="domcontentloaded",
-                    timeout=30_000
-                )
+                await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
 
                 if reg_failed:
                     return False, "Registration failed — returned to page 1"
@@ -685,7 +827,12 @@ class API:
                         val = self._resolve_value(col, row)
                         if col and sel and val:
                             await self._apply_field(page, sel, val, ftype)
-                await page.click(settings.get("submit_selector", "button[type='submit']"))
+                fallback_submit = settings.get("submit_selector", "button[type='submit']")
+                try:
+                    await page.locator(fallback_submit).first.scroll_into_view_if_needed(timeout=3000)
+                except Exception:
+                    pass
+                await page.click(fallback_submit)
 
             suc = settings.get("success_selector", "")
             if suc:
@@ -696,13 +843,11 @@ class API:
         except PWTimeout:
             return False, "Timed out waiting for success indicator"
         except Exception as e:
+            print(f"[ERROR] _fill exception: {e}", flush=True)
+            traceback.print_exc()
             return False, str(e)
         finally:
-            if browser:
-                try:
-                    await browser.close()
-                except Exception:
-                    pass
+            pass
 
 
 # ── Launch ────────────────────────────────────────────────────────────────────
