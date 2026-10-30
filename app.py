@@ -732,6 +732,8 @@ class API:
                     optional    = step.get("optional", False)
 
                     self._emit("log", {"lvl": "info", "msg": f"  Step {si+1}: {step.get('name', f'Page {si+1}')}"})
+                    await self._random_pause()
+                    await self._inject_cursor(page)
 
                     try:
                         for m in step_fields:

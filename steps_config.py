@@ -107,9 +107,9 @@ REGISTRATION_STEPS = [
     {
         "name": "Page 10 - Terms",
         "fields": [
-            {"csv_col": "", "selector": "mat-checkbox[formcontrolname='accettaContratto']",  "type": "check"},
-            {"csv_col": "", "selector": "mat-radio-group[formcontrolname='comunicazioniInformative'] mat-radio-button:first-child", "type": "radio"},
-            {"csv_col": "", "selector": "mat-checkbox[formcontrolname='trattamentoDati']", "type": "check"},
+            {"csv_col": "", "selector": "mat-checkbox:has(label:has-text('Contratto'))",  "type": "check"},
+            {"csv_col": "", "selector": "mat-radio-button:has(label:has-text('Accetto')):first-of-type", "type": "radio"},
+            {"csv_col": "", "selector": "mat-checkbox:has(label:has-text('trattamento dei dati'))", "type": "check"},
         ],
         "submit_selector": "div.registrati-btn-container button",
         "wait_after": "",
