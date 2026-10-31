@@ -39,7 +39,7 @@ REGISTRATION_STEPS = [
     {
         "name": "Page 4 - Bonus",
         "fields": [
-            {"csv_col": "", "selector": "mat-radio-group[formcontrolname='bonus'] app-bonus-item:first-child mat-radio-button", "type": "click_first"},
+            {"csv_col": "", "selector": "mat-radio-group[formcontrolname='bonus'] app-bonus-item:has-text('Casino') mat-radio-button", "type": "click_first"},
         ],
         "submit_selector": "button[appscrollsection='avanti']",
         "wait_after": "",
