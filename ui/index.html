@@ -184,6 +184,18 @@
   .log-ok    { color: #4ADE80; }
   .log-warn  { color: #FCD34D; }
   .log-error { color: #F87171; }
+  /* ── Site selector ── */
+  .site-btn {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    width: 140px; height: 80px; border: 2px solid var(--border); border-radius: var(--r);
+    background: var(--surface); cursor: pointer; transition: border-color .15s, background .15s;
+    font-family: inherit; color: var(--fg);
+  }
+  .site-btn:hover { border-color: var(--accent); background: var(--accent-dim); }
+  .site-btn.selected { border-color: var(--accent); background: var(--accent-dim); box-shadow: 0 0 0 2px rgba(59,126,246,.25); }
+  .site-btn .site-num { font-size: 22px; font-weight: 700; line-height: 1; }
+  .site-btn .site-label { font-size: 11px; color: var(--fg-muted); margin-top: 4px; }
+
   .results-wrap { flex-shrink: 0; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); overflow: hidden; }
   .results-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .05em; }
   .results-list { max-height: 160px; overflow-y: auto; }
@@ -338,8 +350,8 @@
       </div>
 
       <div class="field-group" style="margin-bottom:8px">
-        <label class="field-label" for="cfgUrl">Registration URL</label>
-        <input class="field-inp" id="cfgUrl" type="url" value="https://www.planetwin365.it/area-personale/registrati/" placeholder="https://example.com/register">
+        <label class="field-label" for="siteSelect">Select Website</label>
+        <div style="display:flex;gap:10px;flex-wrap:wrap" id="siteButtons"></div>
       </div>
 
       <div class="run-grid">
@@ -388,7 +400,7 @@
 
 <script>
 // ── State ──────────────────────────────────────────────────────────
-const state = { settings: {}, headers: [], rows: [], running: false };
+const state = { settings: {}, headers: [], rows: [], running: false, selectedSite: '1', sites: {} };
 
 // ── API helper ─────────────────────────────────────────────────────
 function api(method, ...args) { return window.pywebview.api[method](...args); }
@@ -409,13 +421,15 @@ document.querySelectorAll('.nav-item').forEach(item => {
 
 // ── Init ───────────────────────────────────────────────────────────
 window.addEventListener('pywebviewready', async () => {
+  state.sites = await api('get_sites') || {};
   state.settings = await api('load_settings');
+  state.selectedSite = state.settings.selected_site || '1';
+  renderSiteButtons();
   applySettingsToForm(state.settings);
   if (state.settings.last_csv) {
     const r = await api('load_csv_from_path', state.settings.last_csv);
     if (r && !r.error) applyCSV(r);
   }
-  // Sync token field to profiles panel
   document.getElementById('profilesToken').value = state.settings.gologin_api_token || '';
 });
 
@@ -557,9 +571,27 @@ function makeEyeToggle(eyeId, inputId) {
 }
 makeEyeToggle('tokenEye', 'profilesToken');
 
+// ── Site selector ─────────────────────────────────────────────────
+function renderSiteButtons() {
+  const wrap = document.getElementById('siteButtons');
+  wrap.innerHTML = '';
+  for (const [id, site] of Object.entries(state.sites)) {
+    const btn = document.createElement('button');
+    btn.className = 'site-btn' + (id === state.selectedSite ? ' selected' : '');
+    btn.innerHTML = `<span class="site-num">#${esc(id)}</span><span class="site-label">${esc(site.name)}</span>`;
+    btn.addEventListener('click', () => {
+      state.selectedSite = id;
+      wrap.querySelectorAll('.site-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+    wrap.appendChild(btn);
+  }
+}
+
 // ── Configuration ──────────────────────────────────────────────────
 function applySettingsToForm(s) {
-  document.getElementById('cfgUrl').value      = s.registration_url   || 'https://www.planetwin365.it/area-personale/registrati/';
+  state.selectedSite = s.selected_site || '1';
+  renderSiteButtons();
   document.getElementById('cfgSubmit').value   = s.submit_selector    || "button[type='submit']";
   document.getElementById('cfgSuccess').value  = s.success_selector   || '';
   document.getElementById('cfgApiToken').value = s.gologin_api_token  || '';
@@ -585,7 +617,8 @@ function updateRunStat() { document.getElementById('statTotal').textContent = st
 function collectSettings() {
   return {
     ...state.settings,
-    registration_url:   document.getElementById('cfgUrl').value.trim(),
+    selected_site:      state.selectedSite,
+    registration_url:   '',
     submit_selector:    document.getElementById('cfgSubmit').value.trim(),
     success_selector:   document.getElementById('cfgSuccess').value.trim(),
     gologin_api_token:  document.getElementById('cfgApiToken').value.trim(),

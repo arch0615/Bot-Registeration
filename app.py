@@ -21,14 +21,14 @@ from gologin import GoLogin
 from playwright.async_api import async_playwright
 from playwright.async_api import TimeoutError as PWTimeout
 
-from steps_config import REGISTRATION_STEPS
+from sites import SITES
 
 SETTINGS_FILE    = Path(__file__).parent / "settings.json"
 UI_FILE          = Path(__file__).parent / "ui" / "index.html"
 GOLOGIN_API_BASE = "https://api.gologin.com"
 
 DEFAULT_SETTINGS = {
-    "registration_url":   "https://www.planetwin365.it/area-personale/registrati/",
+    "registration_url":   "",
     "profile_id_column":  "profile_name",
     "field_map":          [],
     "submit_selector":    "button[type='submit']",
@@ -39,8 +39,9 @@ DEFAULT_SETTINGS = {
     "gologin_port":       36912,
     "gologin_api_token":  "",
     "last_csv":           "",
-    "steps":              REGISTRATION_STEPS,
+    "steps":              [],
     "profile_mode":       "auto",
+    "selected_site":      "1",
 }
 
 class _SkipStep(Exception):
@@ -113,6 +114,9 @@ class API:
         self._rows     = []
 
     # ── Settings ─────────────────────────────────────────────────────
+    def get_sites(self):
+        return {k: {"name": v["name"], "url": v["url"]} for k, v in SITES.items()}
+
     def load_settings(self):
         s = dict(DEFAULT_SETTINGS)
         if SETTINGS_FILE.exists():
@@ -122,9 +126,10 @@ class API:
                 s.update(saved)
             except Exception:
                 pass
-        s["steps"] = REGISTRATION_STEPS
-        if not s.get("registration_url"):
-            s["registration_url"] = DEFAULT_SETTINGS["registration_url"]
+        site_id = s.get("selected_site", "1")
+        site = SITES.get(site_id, SITES["1"])
+        s["steps"] = site["steps"]
+        s["registration_url"] = site["url"]
         return s
 
     def save_settings(self, data):
@@ -258,8 +263,16 @@ class API:
             return {"ok": False, "error": "Bot is already running."}
         if not self._rows:
             return {"ok": False, "error": "No participant data loaded."}
+
+        site_id = settings.get("selected_site", "1")
+        site = SITES.get(site_id)
+        if not site:
+            return {"ok": False, "error": f"Unknown site: #{site_id}"}
+        settings["registration_url"] = site["url"]
+        settings["steps"] = site["steps"]
+
         if not settings.get("registration_url", "").strip():
-            return {"ok": False, "error": "Registration URL is not configured."}
+            return {"ok": False, "error": f"Website #{site_id} has no registration URL configured yet."}
 
         self._stop    = False
         self._results = []
