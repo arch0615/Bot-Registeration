@@ -13,7 +13,7 @@ SITES = {
     },
     "2": {
         "name": "Website #2",
-        "url": "",
+        "url": "https://www.lottomatica.it/area-personale/registrati/",
         "steps": SITE2_STEPS,
     },
     "3": {
