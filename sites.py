@@ -3,6 +3,7 @@ Site registry — each site has a name, URL, and registration steps.
 """
 
 from steps_config import REGISTRATION_STEPS as SITE1_STEPS
+from steps_site2 import SITE2_STEPS
 
 SITES = {
     "1": {
@@ -13,7 +14,7 @@ SITES = {
     "2": {
         "name": "Website #2",
         "url": "",
-        "steps": [],
+        "steps": SITE2_STEPS,
     },
     "3": {
         "name": "Website #3",
