@@ -42,6 +42,7 @@ DEFAULT_SETTINGS = {
     "steps":              [],
     "profile_mode":       "auto",
     "selected_site":      "1",
+    "bonus_selection":    "Casino",
 }
 
 class _SkipStep(Exception):
@@ -338,6 +339,7 @@ class API:
 
     async def _bot(self, settings, rows):
         self._running = True
+        self._current_settings = settings
         total     = len(rows)
         ok_count  = 0
         pid_col   = settings.get("profile_id_column", "profile_name")
@@ -552,6 +554,8 @@ class API:
             return "Piera"
         if col == "__profession_site4__":
             return "ALTRO"
+        if col == "__bonus_text__":
+            return self._current_settings.get("bonus_selection", "Casino")
         if col == "__security_answer__":
             return "abramo"
         if col == "__spending_limit__":
@@ -769,6 +773,10 @@ class API:
                             col  = m.get("csv_col", "")
                             sel  = m.get("selector", "")
                             ftype = m.get("type", "fill")
+
+                            if sel == "__dynamic_bonus__":
+                                bonus = self._current_settings.get("bonus_selection", "Casino")
+                                sel = f"mat-radio-group[formcontrolname='bonus'] app-bonus-item:has-text('{bonus}') mat-radio-button"
 
                             if not sel:
                                 continue

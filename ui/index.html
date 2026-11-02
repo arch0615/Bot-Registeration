@@ -195,6 +195,14 @@
   .site-btn.selected { border-color: var(--accent); background: var(--accent-dim); box-shadow: 0 0 0 2px rgba(59,126,246,.25); }
   .site-btn .site-num { font-size: 22px; font-weight: 700; line-height: 1; }
   .site-btn .site-label { font-size: 11px; color: var(--fg-muted); margin-top: 4px; }
+  .bonus-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 8px 18px; border: 2px solid var(--border); border-radius: 6px;
+    background: var(--surface); cursor: pointer; transition: border-color .15s, background .15s;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: var(--fg);
+  }
+  .bonus-btn:hover { border-color: var(--accent); background: var(--accent-dim); }
+  .bonus-btn.selected { border-color: var(--accent); background: var(--accent-dim); box-shadow: 0 0 0 2px rgba(59,126,246,.25); }
 
   .results-wrap { flex-shrink: 0; border: 1px solid var(--border); border-radius: var(--r); background: var(--surface); overflow: hidden; }
   .results-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 12px; font-weight: 600; color: var(--fg-muted); text-transform: uppercase; letter-spacing: .05em; }
@@ -354,6 +362,11 @@
         <div style="display:flex;gap:10px;flex-wrap:wrap" id="siteButtons"></div>
       </div>
 
+      <div class="field-group" style="margin-bottom:8px" id="bonusConfigWrap">
+        <label class="field-label">Bonus Selection (Page 4)</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap" id="bonusButtons"></div>
+      </div>
+
       <div class="run-grid">
         <div class="stat-card">
           <div class="stat-label">Participants</div>
@@ -425,6 +438,7 @@ window.addEventListener('pywebviewready', async () => {
   state.settings = await api('load_settings');
   state.selectedSite = state.settings.selected_site || '1';
   renderSiteButtons();
+  renderBonusButtons();
   applySettingsToForm(state.settings);
   if (state.settings.last_csv) {
     const r = await api('load_csv_from_path', state.settings.last_csv);
@@ -583,15 +597,40 @@ function renderSiteButtons() {
       state.selectedSite = id;
       wrap.querySelectorAll('.site-btn').forEach(b => b.classList.remove('selected'));
       btn.classList.add('selected');
+      renderBonusButtons();
     });
     wrap.appendChild(btn);
   }
+}
+
+// ── Bonus selector ────────────────────────────────────────────────
+const BONUS_OPTIONS = ['Casino', 'Sport', 'Poker', 'Bingo', 'Lotterie'];
+const SITES_WITH_BONUS = ['1', '2', '3'];
+
+function renderBonusButtons() {
+  const wrap = document.getElementById('bonusButtons');
+  const configWrap = document.getElementById('bonusConfigWrap');
+  configWrap.style.display = SITES_WITH_BONUS.includes(state.selectedSite) ? '' : 'none';
+  wrap.innerHTML = '';
+  const current = state.settings.bonus_selection || 'Casino';
+  BONUS_OPTIONS.forEach(name => {
+    const btn = document.createElement('button');
+    btn.className = 'bonus-btn' + (name === current ? ' selected' : '');
+    btn.textContent = name;
+    btn.addEventListener('click', () => {
+      state.settings.bonus_selection = name;
+      wrap.querySelectorAll('.bonus-btn').forEach(b => b.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+    wrap.appendChild(btn);
+  });
 }
 
 // ── Configuration ──────────────────────────────────────────────────
 function applySettingsToForm(s) {
   state.selectedSite = s.selected_site || '1';
   renderSiteButtons();
+  renderBonusButtons();
   document.getElementById('cfgSubmit').value   = s.submit_selector    || "button[type='submit']";
   document.getElementById('cfgSuccess').value  = s.success_selector   || '';
   document.getElementById('cfgApiToken').value = s.gologin_api_token  || '';
@@ -618,6 +657,7 @@ function collectSettings() {
   return {
     ...state.settings,
     selected_site:      state.selectedSite,
+    bonus_selection:    state.settings.bonus_selection || 'Casino',
     registration_url:   '',
     submit_selector:    document.getElementById('cfgSubmit').value.trim(),
     success_selector:   document.getElementById('cfgSuccess').value.trim(),

@@ -49,7 +49,7 @@ SITE3_STEPS = [
     {
         "name": "Page 4 - Bonus",
         "fields": [
-            {"csv_col": "", "selector": "mat-radio-group[formcontrolname='bonus'] app-bonus-item:has-text('Casino') mat-radio-button", "type": "click_first"},
+            {"csv_col": "__bonus_text__", "selector": "__dynamic_bonus__", "type": "click_first"},
         ],
         "submit_selector": "button[appscrollsection='avanti']",
         "wait_after": "",
