@@ -21,17 +21,17 @@ SITES = {
     },
     "3": {
         "name": "Website #3",
-        "url": "",
+        "url": "https://www.goldbet.it/",
         "steps": SITE3_STEPS,
     },
     "4": {
         "name": "Website #4",
-        "url": "",
+        "url": "https://www.betflag.it/",
         "steps": SITE4_STEPS,
     },
     "5": {
         "name": "Website #5",
-        "url": "",
+        "url": "https://sportium.it/",
         "steps": SITE5_STEPS,
     },
 }
