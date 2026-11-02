@@ -542,6 +542,10 @@ class API:
             return raw.split(" ")[0] if raw else ""
         if col == "__security_question__":
             return "Qual è il tuo secondo nome?"
+        if col == "__security_question_site5__":
+            return "La mia squadra del cuore"
+        if col == "__deposit_limit_site5__":
+            return "99000 €"
         if col == "__security_answer__":
             return "abramo"
         if col == "__spending_limit__":
