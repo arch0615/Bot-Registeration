@@ -546,6 +546,12 @@ class API:
             return "La mia squadra del cuore"
         if col == "__deposit_limit_site5__":
             return "99000 €"
+        if col == "__security_question_site4__":
+            return "Come si chiama tua madre"
+        if col == "__security_answer_site4__":
+            return "Piera"
+        if col == "__profession_site4__":
+            return "ALTRO"
         if col == "__security_answer__":
             return "abramo"
         if col == "__spending_limit__":
@@ -706,6 +712,12 @@ class API:
                 await page.keyboard.press("ArrowDown")
                 await page.keyboard.press("Enter")
             await self._random_pause(short=True)
+        elif field_type == "file_upload":
+            file_path = Path(__file__).parent / "IDs" / value
+            if not file_path.exists():
+                self._emit("log", {"lvl": "warn", "msg": f"    File not found: {file_path}"})
+                return
+            await page.set_input_files(selector, str(file_path))
         elif field_type == "date":
             parts = value.split("/")
             if len(parts) == 3:
