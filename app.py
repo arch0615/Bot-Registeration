@@ -154,6 +154,15 @@ class API:
             return self._load_path(paths[0])
         return None
 
+    def pick_id_folder(self):
+        paths = self._window.create_file_dialog(webview.FOLDER_DIALOG)
+        if paths and paths[0]:
+            s = self.load_settings()
+            s["id_folder"] = paths[0]
+            self.save_settings(s)
+            return {"path": paths[0]}
+        return None
+
     def load_csv_from_path(self, path):
         if path and Path(path).exists():
             return self._load_path(path)
@@ -274,6 +283,7 @@ class API:
             return {"ok": False, "error": f"Unknown site: #{site_id}"}
         settings["registration_url"] = site["url"]
         settings["steps"] = site["steps"]
+        self._cur_settings = settings
 
         if not settings.get("registration_url", "").strip():
             return {"ok": False, "error": f"Website #{site_id} has no registration URL configured yet."}
@@ -649,6 +659,8 @@ class API:
         if col == "__province_of_residence__":
             code = str(row.get("Province of residence", "")).strip().upper()
             return PROVINCE_MAP.get(code, code)
+        if col == "__province_of_residence_code__":
+            return str(row.get("Province of residence", "")).strip().lower()
         if col == "__birthday__":
             raw = str(row.get("Birthday", "") or row.get("birthday", "")).strip()
             return format_birthday(raw)
@@ -872,15 +884,30 @@ class API:
             if trigger:
                 await page.click(trigger)
                 await self._random_pause()
-                option = page.locator(f"div.form-dropdown__option:has-text('{option_label}'), span:has-text('{option_label}'), li:has-text('{option_label}')").first
+                panel = page.locator(".form-dropdown__options, .form-dropdown__panel, [class*='dropdown']:visible")
+                option = panel.get_by_text(option_label, exact=False).first
                 try:
                     await option.wait_for(state="visible", timeout=5000)
                     await option.click()
                 except Exception:
-                    self._emit("log", {"lvl": "warn", "msg": f"    Dropdown option '{option_label}' not found, skipping"})
+                    try:
+                        option2 = page.get_by_text(option_label, exact=False).first
+                        await option2.wait_for(state="visible", timeout=3000)
+                        await option2.click()
+                    except Exception:
+                        self._emit("log", {"lvl": "warn", "msg": f"    Dropdown option '{option_label}' not found, skipping"})
                 await self._random_pause(short=True)
         elif field_type == "select":
             await page.select_option(selector, value)
+        elif field_type == "select_label":
+            await page.select_option(selector, label=value)
+        elif field_type == "select_postback":
+            await page.select_option(selector, value)
+            await asyncio.sleep(0.3)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:
+                await asyncio.sleep(2)
         elif field_type == "mat_select":
             await page.click(selector)
             await self._random_pause()
@@ -904,13 +931,16 @@ class API:
         elif field_type == "autocomplete":
             await page.click(selector)
             await page.fill(selector, "")
+            await self._random_pause(short=True)
             for ch in value:
                 await page.keyboard.type(ch)
                 await asyncio.sleep(random.uniform(0.05, 0.18))
-            await self._random_pause()
-            dropdown = page.locator("mat-option, [role='listbox'] [role='option'], .autocomplete-suggestion, .MuiAutocomplete-option").first
+            el = page.locator(selector).first
+            await el.dispatch_event("input")
+            await asyncio.sleep(1.5)
+            dropdown = page.locator("mat-option, [role='listbox'] [role='option'], .autocomplete-suggestion, .MuiAutocomplete-option, ng-dropdown-panel .ng-option, .ng-dropdown-panel-items .ng-option").first
             try:
-                await dropdown.wait_for(state="visible", timeout=3000)
+                await dropdown.wait_for(state="visible", timeout=5000)
                 await self._random_pause(short=True)
                 await dropdown.click()
             except Exception:
@@ -918,7 +948,11 @@ class API:
                 await page.keyboard.press("Enter")
             await self._random_pause(short=True)
         elif field_type == "file_upload":
-            file_path = Path(__file__).parent / "IDs" / value
+            id_folder = getattr(self, "_cur_settings", {}).get("id_folder", "")
+            if id_folder:
+                file_path = Path(id_folder) / value
+            else:
+                file_path = Path(__file__).parent / "IDs" / value
             if not file_path.exists():
                 self._emit("log", {"lvl": "warn", "msg": f"    File not found: {file_path}"})
                 return
@@ -1046,9 +1080,15 @@ class API:
                                     self._emit("log", {"lvl": "info", "msg": f"    gogoal_dropdown: {col} = {val}"})
                                     await self._apply_field(page, sel, val, ftype, m)
                             else:
-                                val = self._resolve_value(col, row)
-                                if col and sel and val:
-                                    self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {col} -> {sel[:50]} = {val[:30]}"})
+                                fcfg = m.get("field_cfg", {})
+                                if col:
+                                    val = self._resolve_value(col, row)
+                                elif fcfg.get("value"):
+                                    val = fcfg["value"]
+                                else:
+                                    val = ""
+                                if sel and val:
+                                    self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {col or '(fixed)'} -> {sel[:50]} = {val[:30]}"})
                                     await self._apply_field(page, sel, val, ftype)
 
                         # Check if a new tab opened after field actions

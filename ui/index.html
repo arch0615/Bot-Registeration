@@ -572,6 +572,14 @@
         <div style="display:flex;gap:10px;flex-wrap:wrap" id="siteButtons"></div>
       </div>
 
+      <div class="field-group" style="margin-bottom:8px">
+        <label class="field-label" for="cfgIdFolder">ID Card Folder</label>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input class="field-inp" id="cfgIdFolder" type="text" placeholder="Select folder containing ID card images..." style="flex:1" readonly>
+          <button class="btn" id="btnPickIdFolder" style="white-space:nowrap">Browse</button>
+        </div>
+      </div>
+
       <div class="field-group" style="margin-bottom:8px" id="bonusConfigWrap">
         <label class="field-label">Bonus Selection (Page 4)</label>
         <div style="display:flex;gap:8px;flex-wrap:wrap" id="bonusButtons"></div>
@@ -666,6 +674,14 @@ window.addEventListener('pywebviewready', async () => {
 document.getElementById('btnPickFile').addEventListener('click', async () => {
   const r = await api('pick_csv_file');
   if (r && !r.error) applyCSV(r);
+});
+document.getElementById('btnPickIdFolder').addEventListener('click', async () => {
+  const r = await api('pick_id_folder');
+  if (r && !r.error && r.path) {
+    document.getElementById('cfgIdFolder').value = r.path;
+    state.settings.id_folder = r.path;
+    showStatus('ID folder: ' + r.path);
+  }
 });
 document.getElementById('btnAddRow').addEventListener('click', () => {
   state.rows.push(Object.fromEntries(state.headers.map(h => [h, ''])));
@@ -887,6 +903,7 @@ function applySettingsToForm(s) {
   document.getElementById('cfgBootWait').value = s.profile_boot_wait  || 3;
   document.getElementById('cfgDelay').value    = s.delay_between_runs || 2;
   document.getElementById('cfgTimeout').value  = s.success_timeout    || 15;
+  document.getElementById('cfgIdFolder').value = s.id_folder || '';
   document.getElementById('profilesToken').value = s.gologin_api_token || '';
   const mode = s.profile_mode || 'auto';
   const radio = document.getElementById(mode === 'manual' ? 'modeManual' : 'modeAuto');
@@ -906,6 +923,7 @@ function collectSettings() {
     ...state.settings,
     selected_site:      state.selectedSite,
     bonus_selection:    state.settings.bonus_selection || 'Casino',
+    id_folder:          document.getElementById('cfgIdFolder').value.trim(),
     registration_url:   '',
     submit_selector:    document.getElementById('cfgSubmit').value.trim(),
     success_selector:   document.getElementById('cfgSuccess').value.trim(),

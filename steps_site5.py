@@ -43,8 +43,8 @@ SITE5_STEPS = [
             {"csv_col": "__gender__", "selector": "", "type": "gogoal_dropdown",
              "trigger": "gogoal-form-dropdown:has(label:has-text('Genere')) .form-dropdown__trigger",
              "selector_map": {
-                 "Maschile": "text=MASCHIO",
-                 "Femminile": "text=FEMMINA",
+                 "Maschile": "MASCHIO",
+                 "Femminile": "FEMMINA",
              }},
             # Birthday — three separate inputs (day/month/year)
             {"csv_col": "__birth_day__",   "selector": "input[name='dataNascita__date__day']",   "type": "fill"},
@@ -75,7 +75,15 @@ SITE5_STEPS = [
         "fields": [
             {"csv_col": "__document_type__", "selector": "", "type": "gogoal_dropdown",
              "trigger": "gogoal-form-dropdown:has(label:has-text('Tipo documento')) .form-dropdown__trigger",
-             "selector_map": {}},
+             "selector_map": {
+                 "Carta d'identita' elettronica": "CARTA DI IDENTITA'",
+                 "Carta d'identità elettronica": "CARTA DI IDENTITA'",
+                 "Carta d'identita'": "CARTA DI IDENTITA'",
+                 "Carta d'identità": "CARTA DI IDENTITA'",
+                 "Passaporto": "PASSAPORTO",
+                 "Patente": "PATENTE",
+                 "Porto d'armi": "PORTO D'ARMI",
+             }},
             {"csv_col": "Document number", "selector": "input[name='numeroDocumento']", "type": "fill"},
             {"csv_col": "__issuing_body__", "selector": "", "type": "gogoal_dropdown",
              "trigger": "gogoal-form-dropdown:has(label:has-text('Rilasciato da')) .form-dropdown__trigger",
