@@ -16,12 +16,12 @@ SITES = {
     },
     "2": {
         "name": "Website #2",
-        "url": "https://www.lottomatica.it/area-personale/registrati/",
+        "url": "https://www.lottomatica.it/area-personale/registrati/codice-fiscale",
         "steps": SITE2_STEPS,
     },
     "3": {
         "name": "Website #3",
-        "url": "https://www.goldbet.it/",
+        "url": "https://www.goldbet.it/area-personale/registrati/codice-fiscale",
         "steps": SITE3_STEPS,
     },
     "4": {
@@ -31,7 +31,7 @@ SITES = {
     },
     "5": {
         "name": "Website #5",
-        "url": "https://sportium.it/",
+        "url": "https://sportium.it/account/registration",
         "steps": SITE5_STEPS,
     },
 }

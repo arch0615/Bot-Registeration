@@ -1,26 +1,27 @@
 """
 Registration steps for Website #4 (BetFlag).
 """
+from steps_config import COOKIE_STEP
 
 SITE4_STEPS = [
-    # ── Page 0: Accept Cookies ─────────────────────────────────────
+    COOKIE_STEP,
+    # ── Step 2: Click REGISTRATI in header ───────────────────────────
     {
-        "name": "Accept Cookies",
+        "name": "Page 1 - Click REGISTRATI",
         "fields": [
-            {"csv_col": "", "selector": "button:has-text('Accetta tutti i cookie'), button:has-text('Accetta tutti'), button:has-text('Accept all'), button:has-text('ACCETTA')", "type": "click_first"},
+            {"csv_col": "", "selector": "a.registrati:visible, a:has-text('REGISTRATI'):visible, button:has-text('REGISTRATI'):visible", "type": "click_first"},
         ],
         "submit_selector": "",
         "wait_after": "",
-        "optional": True,
     },
-    # ── Page 1: Select Classica ────────────────────────────────────
+    # ── Step 3: Select REGISTRAZIONE CLASSICA ─────────────────────────
     {
-        "name": "Page 1 - Select Classica",
+        "name": "Page 2 - Select Classica Registration",
         "fields": [
-            {"csv_col": "", "selector": "a:has-text('Classica'), button:has-text('Classica'), div:has-text('Classica') >> visible=true", "type": "click_first"},
+            {"csv_col": "", "selector": "a:has-text('REGISTRAZIONE CLASSICA'), div:has-text('REGISTRAZIONE CLASSICA') >> visible=true, a:has-text('Classica')", "type": "click_first"},
         ],
         "submit_selector": "",
-        "wait_after": "",
+        "wait_after": "input[name*='nome'], input[name*='Nome'], input[name*='codiceFiscale']",
     },
     # ── Page 2: Personal Info + Bonus ──────────────────────────────
     {

@@ -24,6 +24,7 @@ from playwright.async_api import TimeoutError as PWTimeout
 from sites import SITES
 
 SETTINGS_FILE    = Path(__file__).parent / "settings.json"
+HISTORY_FILE     = Path(__file__).parent / "run_history.json"
 UI_FILE          = Path(__file__).parent / "ui" / "index.html"
 GOLOGIN_API_BASE = "https://api.gologin.com"
 
@@ -107,12 +108,14 @@ def format_birthday(raw: str) -> str:
 
 class API:
     def __init__(self):
-        self._window   = None
-        self._running  = False
-        self._stop     = False
-        self._results  = []
-        self._headers  = []
-        self._rows     = []
+        self._window      = None
+        self._running     = False
+        self._stop        = False
+        self._results     = []
+        self._headers     = []
+        self._rows        = []
+        self._bot_thread  = None
+        self._bot_loop    = None
 
     # ── Settings ─────────────────────────────────────────────────────
     def get_sites(self):
@@ -226,7 +229,7 @@ class API:
                     timeout=aiohttp.ClientTimeout(total=20)
                 ) as r:
                     if r.status == 401:
-                        return {"error": "Invalid API token — check GoLogin → Settings → API."}
+                        return {"error": "Invalid API token - check GoLogin > Settings > API."}
                     if r.status != 200:
                         return {"error": f"GoLogin API error: HTTP {r.status}"}
                     data = await r.json(content_type=None)
@@ -277,16 +280,35 @@ class API:
 
         self._stop    = False
         self._results = []
-        threading.Thread(
+        t = threading.Thread(
             target=self._thread_run,
             args=(settings, list(self._rows)),
             daemon=True
-        ).start()
+        )
+        self._bot_thread = t
+        t.start()
         return {"ok": True}
 
     def stop_bot(self):
         self._stop = True
+        try:
+            self._stop_profile_sync()
+        except Exception:
+            pass
+        if self._bot_loop and self._bot_loop.is_running():
+            for task in asyncio.all_tasks(self._bot_loop):
+                self._bot_loop.call_soon_threadsafe(task.cancel)
+        self._running = False
         return True
+
+    def _stop_profile_sync(self):
+        gl = getattr(self, "_current_gl", None)
+        if gl:
+            try:
+                gl.stop()
+            except Exception:
+                pass
+            self._current_gl = None
 
     def export_results_dialog(self):
         if not self._results:
@@ -309,14 +331,49 @@ class API:
         except Exception as e:
             return {"error": str(e)}
 
+    # ── Dashboard / History ──────────────────────────────────────────
+    def get_run_history(self):
+        if HISTORY_FILE.exists():
+            try:
+                with open(HISTORY_FILE, encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+        return []
+
+    def _save_run_record(self, site_id, ok, total, results):
+        history = self.get_run_history()
+        history.insert(0, {
+            "timestamp": datetime.now().isoformat(),
+            "site": site_id,
+            "site_name": SITES.get(site_id, {}).get("name", f"#{site_id}"),
+            "ok": ok,
+            "total": total,
+            "results": [{"email": r.get("email", ""), "status": r.get("bot_status", "")} for r in results],
+        })
+        history = history[:200]
+        try:
+            with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+                json.dump(history, f, indent=2)
+        except Exception:
+            pass
+
+    def clear_run_history(self):
+        try:
+            if HISTORY_FILE.exists():
+                HISTORY_FILE.unlink()
+            return True
+        except Exception as e:
+            return {"error": str(e)}
+
     # ── Internals ─────────────────────────────────────────────────────
     def _emit(self, event, data=None):
         if event == "log" and data:
             lvl = data.get("lvl", "info").upper()
             msg = data.get("msg", "")
-            print(f"[{lvl}] {msg}", flush=True)
+            print(f"[{lvl}] {msg}".encode("ascii", "replace").decode(), flush=True)
         elif event == "row_done" and data:
-            print(f"[ROW_DONE] {data.get('label','')} → {data.get('status','')}", flush=True)
+            print(f"[ROW_DONE] {data.get('label','')} -> {data.get('status','')}", flush=True)
         elif event in ("started", "finished", "progress"):
             print(f"[{event.upper()}] {data}", flush=True)
         payload = json.dumps({"event": event, "data": data}, default=str)
@@ -328,13 +385,18 @@ class API:
 
     def _thread_run(self, settings, rows):
         loop = asyncio.new_event_loop()
+        self._bot_loop = loop
         asyncio.set_event_loop(loop)
         try:
             loop.run_until_complete(self._bot(settings, rows))
+        except asyncio.CancelledError:
+            print("[INFO] Bot force-stopped by user.", flush=True)
         except Exception as e:
             print(f"[FATAL] Bot thread crashed: {e}", flush=True)
             traceback.print_exc()
         finally:
+            self._bot_loop = None
+            self._running = False
             loop.close()
 
     async def _bot(self, settings, rows):
@@ -373,7 +435,19 @@ class API:
         if auto_mode and len(profile_list) < total:
             self._emit("log", {"lvl": "warn", "msg": f"  ⚠ Only {len(profile_list)} profiles for {total} rows — extra rows will be skipped."})
 
+        ACCESS_FAIL_PHRASES = (
+            "site not accessible", "geo-blocked", "site blocked",
+            "site unreachable", "profile may not have access",
+            "profile may lack access",
+        )
+
+        def _is_access_failure(message: str) -> bool:
+            low = message.lower()
+            return any(p in low for p in ACCESS_FAIL_PHRASES)
+
         async with async_playwright() as pw:
+            profile_idx = 0  # tracks which profile to use next in auto mode
+
             for i, row in enumerate(rows):
                 if self._stop:
                     self._emit("log", {"lvl": "warn", "msg": "Stopped by user."})
@@ -384,15 +458,17 @@ class API:
                 self._emit("progress", {"i": i, "total": total, "label": label})
                 self._emit("log", {"lvl": "info", "msg": f"[{i+1}/{total}] {label}"})
 
+                # ── Resolve profile ID ──
                 if auto_mode:
-                    if i >= len(profile_list):
+                    if profile_idx >= len(profile_list):
                         msg = "No more profiles available"
                         self._results.append({**row, "bot_status": "SKIP", "bot_message": msg})
                         self._emit("log",      {"lvl": "warn", "msg": f"  ⚠ {msg}"})
                         self._emit("row_done", {"i": i, "status": "SKIP", "label": label})
                         continue
-                    pid = profile_list[i]["id"]
-                    self._emit("log", {"lvl": "info", "msg": f"  Auto-assigned profile: {profile_list[i]['name']} ({pid[:8]}…)"})
+                    pid = profile_list[profile_idx]["id"]
+                    pname = profile_list[profile_idx]["name"]
+                    self._emit("log", {"lvl": "info", "msg": f"  Auto-assigned profile: {pname} ({pid[:8]}…)"})
                 else:
                     raw_pid = str(row.get(pid_col, "")).strip()
 
@@ -407,7 +483,7 @@ class API:
                         pid = raw_pid
                     elif raw_pid in name_to_id:
                         pid = name_to_id[raw_pid]
-                        self._emit("log", {"lvl": "info", "msg": f"  Resolved '{raw_pid}' → {pid[:8]}…"})
+                        self._emit("log", {"lvl": "info", "msg": f"  Resolved '{raw_pid}' -> {pid[:8]}..."})
                     else:
                         msg = (
                             f"Profile '{raw_pid}' not found. "
@@ -418,20 +494,49 @@ class API:
                         self._emit("row_done", {"i": i, "status": "FAIL", "label": label})
                         continue
 
-                self._emit("log", {"lvl": "info", "msg": "  Starting GoLogin profile…"})
-                ws = await self._start_profile(token, pid)
-                if not ws:
-                    msg = "GoLogin profile failed to start"
-                    self._results.append({**row, "bot_status": "FAIL", "bot_message": msg})
-                    self._emit("log",      {"lvl": "error", "msg": f"  ✗ {msg}"})
-                    self._emit("row_done", {"i": i, "status": "FAIL", "label": label})
-                    continue
+                # ── Try profile, retry with next on access failure ──
+                max_retries = len(profile_list) - profile_idx if auto_mode else 1
+                ok = False
+                msg = ""
 
-                self._emit("log", {"lvl": "info", "msg": "  Profile started, connecting…"})
-                await asyncio.sleep(settings.get("profile_boot_wait", 5))
+                for attempt in range(max_retries):
+                    if self._stop:
+                        break
 
-                ok, msg = await self._fill(pw, ws, row, settings, field_map)
-                await self._stop_profile()
+                    self._emit("log", {"lvl": "info", "msg": "  Starting GoLogin profile…"})
+                    ws = await self._start_profile(token, pid)
+                    if not ws:
+                        msg = "GoLogin profile failed to start"
+                        self._emit("log", {"lvl": "error", "msg": f"  ✗ {msg}"})
+                        await self._stop_profile()
+                        if auto_mode:
+                            profile_idx += 1
+                            if profile_idx < len(profile_list):
+                                pid = profile_list[profile_idx]["id"]
+                                pname = profile_list[profile_idx]["name"]
+                                self._emit("log", {"lvl": "warn", "msg": f"  Trying next profile: {pname} ({pid[:8]}…)"})
+                                continue
+                        break
+
+                    self._emit("log", {"lvl": "info", "msg": "  Profile started, connecting…"})
+                    await asyncio.sleep(settings.get("profile_boot_wait", 5))
+
+                    ok, msg = await self._fill(pw, ws, row, settings, field_map)
+                    await self._stop_profile()
+
+                    if not ok and _is_access_failure(msg) and auto_mode:
+                        self._emit("log", {"lvl": "warn", "msg": f"  ⚠ {msg}"})
+                        profile_idx += 1
+                        if profile_idx < len(profile_list):
+                            pid = profile_list[profile_idx]["id"]
+                            pname = profile_list[profile_idx]["name"]
+                            self._emit("log", {"lvl": "info", "msg": f"  Switching to next profile: {pname} ({pid[:8]}…)"})
+                            wait = max(settings.get("delay_between_runs", 2), 3)
+                            await asyncio.sleep(wait)
+                            continue
+                        else:
+                            msg = "No more profiles with site access available"
+                    break
 
                 status = "OK" if ok else "FAIL"
                 icon   = "✓" if ok else "✗"
@@ -442,12 +547,17 @@ class API:
                 if ok:
                     ok_count += 1
 
+                if auto_mode:
+                    profile_idx += 1
+
                 if i < total - 1 and not self._stop:
                     wait = max(settings.get("delay_between_runs", 2), 5)
                     self._emit("log", {"lvl": "info", "msg": f"  Waiting {wait}s before next profile…"})
                     await asyncio.sleep(wait)
 
         self._running = False
+        site_id = settings.get("selected_site", "1")
+        self._save_run_record(site_id, ok_count, total, self._results)
         self._emit("finished", {
             "ok":      ok_count,
             "total":   total,
@@ -511,14 +621,20 @@ class API:
     async def _stop_profile(self):
         gl = getattr(self, '_current_gl', None)
         if gl:
-            print("[INFO] Stopping GoLogin profile…", flush=True)
+            print("[INFO] Stopping GoLogin profile...", flush=True)
             loop = asyncio.get_event_loop()
             try:
-                await loop.run_in_executor(None, gl.stop)
+                await asyncio.wait_for(
+                    loop.run_in_executor(None, gl.stop),
+                    timeout=15
+                )
                 print("[INFO] GoLogin profile stopped.", flush=True)
+            except asyncio.TimeoutError:
+                print("[WARN] Profile stop timed out - forcing cleanup.", flush=True)
             except Exception as e:
                 print(f"[WARN] Error stopping profile: {e}", flush=True)
             self._current_gl = None
+            await asyncio.sleep(2)
 
     def _resolve_value(self, col, row):
         if col == "__username__":
@@ -536,6 +652,18 @@ class API:
         if col == "__birthday__":
             raw = str(row.get("Birthday", "") or row.get("birthday", "")).strip()
             return format_birthday(raw)
+        if col == "__birth_day__":
+            raw = str(row.get("Birthday", "") or row.get("birthday", "")).strip()
+            parts = raw.split("/")
+            return parts[0] if len(parts) >= 3 else ""
+        if col == "__birth_month__":
+            raw = str(row.get("Birthday", "") or row.get("birthday", "")).strip()
+            parts = raw.split("/")
+            return parts[1] if len(parts) >= 3 else ""
+        if col == "__birth_year__":
+            raw = str(row.get("Birthday", "") or row.get("birthday", "")).strip()
+            parts = raw.split("/")
+            return parts[2] if len(parts) >= 3 else ""
         if col == "__gender__":
             code = str(row.get("Gender", "") or row.get("gender", "")).strip().upper()
             return GENDER_MAP.get(code, code)
@@ -572,6 +700,44 @@ class API:
         if col == "__expiration_date__":
             raw = str(row.get("Expiration date", "") or row.get("expiration_date", "")).strip()
             return format_birthday(raw)
+        if col == "__issue_day__":
+            raw = str(row.get("Issue date", "")).strip()
+            parts = raw.split("/")
+            return parts[0] if len(parts) >= 3 else ""
+        if col == "__issue_month__":
+            raw = str(row.get("Issue date", "")).strip()
+            parts = raw.split("/")
+            return parts[1] if len(parts) >= 3 else ""
+        if col == "__issue_year__":
+            raw = str(row.get("Issue date", "")).strip()
+            parts = raw.split("/")
+            return parts[2] if len(parts) >= 3 else ""
+        if col == "__expiry_day__":
+            raw = str(row.get("Expiration date", "")).strip()
+            parts = raw.split("/")
+            return parts[0] if len(parts) >= 3 else ""
+        if col == "__expiry_month__":
+            raw = str(row.get("Expiration date", "")).strip()
+            parts = raw.split("/")
+            return parts[1] if len(parts) >= 3 else ""
+        if col == "__expiry_year__":
+            raw = str(row.get("Expiration date", "")).strip()
+            parts = raw.split("/")
+            return parts[2] if len(parts) >= 3 else ""
+        if col == "__phone_local__":
+            phone = str(row.get("Telephone", "") or row.get("telephone", "")).strip()
+            if phone.startswith("+39"):
+                phone = phone[3:]
+            elif phone.startswith("39") and len(phone) > 10:
+                phone = phone[2:]
+            return phone
+        if col == "__phone_with_prefix__":
+            phone = str(row.get("Telephone", "") or row.get("telephone", "")).strip()
+            if phone.startswith("+39"):
+                return phone
+            if phone.startswith("39") and len(phone) > 10:
+                return "+" + phone
+            return "+39" + phone
         return str(row.get(col, "")).strip()
 
     CURSOR_INJECT_JS = """
@@ -629,6 +795,8 @@ class API:
         for ch in value:
             await page.keyboard.type(ch)
             await asyncio.sleep(random.uniform(0.05, 0.18))
+        await el.dispatch_event("input")
+        await el.dispatch_event("change")
         await page.keyboard.press("Tab")
         await asyncio.sleep(random.uniform(0.1, 0.3))
 
@@ -653,6 +821,25 @@ class API:
         await self._random_pause(short=True)
         if field_type == "fill":
             await self._human_type(page, selector, value)
+        elif field_type == "append":
+            el = page.locator(selector).first
+            await el.click()
+            await page.keyboard.press("End")
+            await asyncio.sleep(random.uniform(0.1, 0.3))
+            # Strip country prefix if present — the field already has +39
+            v = value.strip()
+            if v.startswith("+39"):
+                v = v[3:]
+            elif v.startswith("39") and len(v) > 10:
+                v = v[2:]
+            value = v
+            for ch in value:
+                await page.keyboard.type(ch)
+                await asyncio.sleep(random.uniform(0.05, 0.18))
+            await el.dispatch_event("input")
+            await el.dispatch_event("change")
+            await page.keyboard.press("Tab")
+            await asyncio.sleep(random.uniform(0.1, 0.3))
         elif field_type == "check":
             el = page.locator(selector).first
             label = el.locator("label").first
@@ -678,6 +865,20 @@ class API:
             target = smap.get(value, "")
             if target:
                 await page.click(target)
+        elif field_type == "gogoal_dropdown":
+            trigger = (field_cfg or {}).get("trigger", "")
+            smap = (field_cfg or {}).get("selector_map", {})
+            option_label = smap.get(value, value)
+            if trigger:
+                await page.click(trigger)
+                await self._random_pause()
+                option = page.locator(f"div.form-dropdown__option:has-text('{option_label}'), span:has-text('{option_label}'), li:has-text('{option_label}')").first
+                try:
+                    await option.wait_for(state="visible", timeout=5000)
+                    await option.click()
+                except Exception:
+                    self._emit("log", {"lvl": "warn", "msg": f"    Dropdown option '{option_label}' not found, skipping"})
+                await self._random_pause(short=True)
         elif field_type == "select":
             await page.select_option(selector, value)
         elif field_type == "mat_select":
@@ -751,7 +952,46 @@ class API:
             browser.on("disconnected", lambda: print("[WARN] Browser disconnected!", flush=True))
             url = settings["registration_url"]
             self._emit("log", {"lvl": "info", "msg": f"    Navigating to {url}"})
-            await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            try:
+                resp = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            except PWTimeout:
+                return False, "Site unreachable — page load timed out (profile may lack access)"
+            except Exception as nav_err:
+                return False, f"Site unreachable — {nav_err}"
+
+            # Check if navigation opened a new tab
+            await asyncio.sleep(1)
+            if len(ctx.pages) > 1 and ctx.pages[-1] != page:
+                page = ctx.pages[-1]
+                self._emit("log", {"lvl": "info", "msg": f"    Switched to new tab after navigation"})
+                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+
+            if page.is_closed():
+                if len(ctx.pages) > 0:
+                    page = ctx.pages[-1]
+                    self._emit("log", {"lvl": "info", "msg": f"    Original page closed, switched to active page"})
+                    await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                else:
+                    return False, "Page closed unexpectedly"
+
+            if resp and resp.status in (403, 451, 503):
+                return False, f"Site blocked (HTTP {resp.status}) - this profile may not have access"
+
+            blocked = await page.evaluate("""() => {
+                const t = document.title.toLowerCase();
+                const b = document.body ? document.body.innerText.substring(0, 500).toLowerCase() : '';
+                if (t.includes('access denied') || t.includes('blocked') || t.includes('forbidden')
+                    || t.includes('not available') || t.includes('geo') || t.includes('restricted'))
+                    return true;
+                if (b.includes('access denied') || b.includes('not available in your')
+                    || b.includes('geo-restrict') || b.includes('blocked')
+                    || b.includes('this site is not accessible') || b.includes('your region'))
+                    return true;
+                return false;
+            }""")
+            if blocked:
+                return False, "Site not accessible from this profile — geo-blocked or restricted"
+
             await self._inject_cursor(page)
             await self._random_pause()
 
@@ -778,12 +1018,12 @@ class API:
                                 bonus = self._current_settings.get("bonus_selection", "Casino")
                                 sel = f"mat-radio-group[formcontrolname='bonus'] app-bonus-item:has-text('{bonus}') mat-radio-button"
 
-                            if not sel:
+                            if not sel and ftype not in ("gogoal_dropdown",):
                                 continue
 
                             if optional:
                                 try:
-                                    await page.wait_for_selector(sel, timeout=3000)
+                                    await page.wait_for_selector(sel, timeout=8000)
                                 except PWTimeout:
                                     self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped"})
                                     raise _SkipStep()
@@ -798,13 +1038,24 @@ class API:
                             elif ftype == "radio_map":
                                 val = self._resolve_value(col, row) if col else ""
                                 if val:
-                                    self._emit("log", {"lvl": "info", "msg": f"    radio_map: {val} → {sel[:60]}"})
+                                    self._emit("log", {"lvl": "info", "msg": f"    radio_map: {val} -> {sel[:60]}"})
+                                    await self._apply_field(page, sel, val, ftype, m)
+                            elif ftype == "gogoal_dropdown":
+                                val = self._resolve_value(col, row) if col else ""
+                                if val:
+                                    self._emit("log", {"lvl": "info", "msg": f"    gogoal_dropdown: {col} = {val}"})
                                     await self._apply_field(page, sel, val, ftype, m)
                             else:
                                 val = self._resolve_value(col, row)
                                 if col and sel and val:
-                                    self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {col} → {sel[:50]} = {val[:30]}"})
+                                    self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {col} -> {sel[:50]} = {val[:30]}"})
                                     await self._apply_field(page, sel, val, ftype)
+
+                        # Check if a new tab opened after field actions
+                        if len(ctx.pages) > 1 and ctx.pages[-1] != page:
+                            page = ctx.pages[-1]
+                            self._emit("log", {"lvl": "info", "msg": f"    Switched to new tab"})
+                            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
 
                         if step_submit:
                             await self._random_pause()
@@ -813,11 +1064,10 @@ class API:
                                 await btn.scroll_into_view_if_needed(timeout=3000)
                             except Exception:
                                 pass
-                            # Wait for button to become enabled
                             for _wait in range(15):
                                 if await btn.is_enabled():
                                     break
-                                self._emit("log", {"lvl": "info", "msg": f"    Waiting for submit button to enable… ({_wait+1})"})
+                                self._emit("log", {"lvl": "info", "msg": f"    Waiting for submit button to enable... ({_wait+1})"})
                                 await asyncio.sleep(1)
                             else:
                                 self._emit("log", {"lvl": "warn", "msg": f"    Submit button still disabled after 15s"})
@@ -827,6 +1077,8 @@ class API:
                                 await page.wait_for_selector(wait_sel, timeout=15_000)
                             else:
                                 await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                        elif wait_sel:
+                            await page.wait_for_selector(wait_sel, timeout=15_000)
                     except _SkipStep:
                         continue
 
@@ -886,7 +1138,11 @@ class API:
             traceback.print_exc()
             return False, str(e)
         finally:
-            pass
+            if browser:
+                try:
+                    await browser.close()
+                except Exception:
+                    pass
 
 
 # ── Launch ────────────────────────────────────────────────────────────────────

@@ -1,18 +1,10 @@
 """
 Registration steps for Website #2.
 """
+from steps_config import COOKIE_STEP
 
 SITE2_STEPS = [
-    # ── Page 0: Accept Cookies ─────────────────────────────────────
-    {
-        "name": "Accept Cookies",
-        "fields": [
-            {"csv_col": "", "selector": "button:has-text('Accetta tutti i cookie'), button:has-text('Accetta tutti'), button:has-text('Accept all')", "type": "click_first"},
-        ],
-        "submit_selector": "",
-        "wait_after": "",
-        "optional": True,
-    },
+    COOKIE_STEP,
     # ── Page 1: Tax ID (Codice Fiscale) ────────────────────────────
     {
         "name": "Page 1 - Tax ID",
@@ -36,7 +28,7 @@ SITE2_STEPS = [
             {"csv_col": "__username__",  "selector": "#username",                              "type": "fill"},
             {"csv_col": "Password",      "selector": "input[formcontrolname='password']",       "type": "fill"},
             {"csv_col": "Email",         "selector": "#email",                                  "type": "fill"},
-            {"csv_col": "Telephone",     "selector": "#telefono",                               "type": "fill"},
+            {"csv_col": "__phone_local__",     "selector": "#telefono",                               "type": "fill"},
             {"csv_col": "",              "selector": "mat-checkbox[formcontrolname='maggiorenne']", "type": "check"},
             {"csv_col": "",              "selector": "mat-radio-group[formcontrolname='PEP'] mat-radio-button:first-child", "type": "radio"},
             {"csv_col": "",              "selector": "mat-radio-group[formcontrolname='proseguiRegistrazione'] mat-radio-button:first-child", "type": "radio"},

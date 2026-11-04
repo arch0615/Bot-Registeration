@@ -3,7 +3,33 @@ Pre-built step configurations for the registration flow (pages 3–10 + close mo
 Import and assign to settings["steps"] to use.
 """
 
+COOKIE_SELECTOR = (
+    "button:has-text('Accetta tutti i cookie'), "
+    "button:has-text('Accetta tutti'), "
+    "button:has-text('Accept all'), "
+    ":is(button, a, div, span):text-is('Accetta'), "
+    ":is(button, a, div, span):text-is('ACCETTA'), "
+    "#CybsAcceptAllBtn, "
+    "#onetrust-accept-btn-handler, "
+    "button[id*='accept'], "
+    "a.cookie-accept, "
+    "[class*='cookie'] button:has-text('Accetta'), "
+    "[class*='consent'] button:has-text('Accetta')"
+)
+
+COOKIE_STEP = {
+    "name": "Accept Cookies",
+    "fields": [
+        {"csv_col": "", "selector": COOKIE_SELECTOR, "type": "click_first"},
+    ],
+    "submit_selector": "",
+    "wait_after": "",
+    "optional": True,
+}
+
 REGISTRATION_STEPS = [
+    # ── Page 0: Accept Cookies ─────────────────────────────────────
+    COOKIE_STEP,
     # ── Page 1: Tax ID (Codice Fiscale) ─────────────────────────────
     {
         "name": "Page 1 - Tax ID",
@@ -27,7 +53,7 @@ REGISTRATION_STEPS = [
             {"csv_col": "__username__",  "selector": "#username",                              "type": "fill"},
             {"csv_col": "Password",      "selector": "input[formcontrolname='password']",       "type": "fill"},
             {"csv_col": "Email",         "selector": "#email",                                  "type": "fill"},
-            {"csv_col": "Telephone",     "selector": "#telefono",                               "type": "fill"},
+            {"csv_col": "__phone_local__",     "selector": "#telefono",                               "type": "fill"},
             {"csv_col": "",              "selector": "mat-checkbox[formcontrolname='maggiorenne']", "type": "check"},
             {"csv_col": "",              "selector": "mat-radio-group[formcontrolname='PEP'] mat-radio-button:first-child", "type": "radio"},
             {"csv_col": "",              "selector": "mat-radio-group[formcontrolname='proseguiRegistrazione'] mat-radio-button:first-child", "type": "radio"},
