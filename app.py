@@ -792,24 +792,31 @@ class API:
             if box:
                 tx = box["x"] + box["width"] / 2
                 ty = box["y"] + box["height"] / 2
-                await page.mouse.move(tx, ty, steps=random.randint(8, 15))
+                mouse = getattr(page, 'mouse', None) or page.page.mouse
+                await mouse.move(tx, ty, steps=random.randint(8, 15))
                 await asyncio.sleep(random.uniform(0.1, 0.3))
         except Exception:
             pass
 
+    @staticmethod
+    def _kb(page_or_frame):
+        """Get keyboard from Page or Frame (Frame has no .keyboard, use .page)."""
+        return getattr(page_or_frame, 'keyboard', None) or page_or_frame.page.keyboard
+
     async def _human_type(self, page, selector, value):
         """Type text character by character with random human-like delays."""
+        kb = self._kb(page)
         el = page.locator(selector).first
         await el.click()
         await el.press("Control+a")
-        await page.keyboard.press("Backspace")
+        await kb.press("Backspace")
         await asyncio.sleep(random.uniform(0.1, 0.3))
         for ch in value:
-            await page.keyboard.type(ch)
+            await kb.type(ch)
             await asyncio.sleep(random.uniform(0.05, 0.18))
         await el.dispatch_event("input")
         await el.dispatch_event("change")
-        await page.keyboard.press("Tab")
+        await kb.press("Tab")
         await asyncio.sleep(random.uniform(0.1, 0.3))
 
     async def _random_pause(self, short=False):
@@ -829,16 +836,27 @@ class API:
                 await el.scroll_into_view_if_needed(timeout=3000)
             except Exception:
                 pass
+            # Skip disabled/readonly fields for fill/select types (pre-populated by server)
+            if field_type in ("fill", "append", "select", "select_label", "select_postback", "date", "autocomplete"):
+                try:
+                    state = await page.locator(selector).first.evaluate(
+                        "el => ({disabled: el.disabled, readonly: el.readOnly || el.hasAttribute('readonly')})"
+                    )
+                    if state.get("disabled") or state.get("readonly"):
+                        self._emit("log", {"lvl": "info", "msg": f"    Field {selector[:50]} is disabled/readonly, skipping"})
+                        return
+                except Exception:
+                    pass
             await self._move_to_element(page, selector)
         await self._random_pause(short=True)
         if field_type == "fill":
             await self._human_type(page, selector, value)
         elif field_type == "append":
+            kb = self._kb(page)
             el = page.locator(selector).first
             await el.click()
-            await page.keyboard.press("End")
+            await kb.press("End")
             await asyncio.sleep(random.uniform(0.1, 0.3))
-            # Strip country prefix if present — the field already has +39
             v = value.strip()
             if v.startswith("+39"):
                 v = v[3:]
@@ -846,11 +864,11 @@ class API:
                 v = v[2:]
             value = v
             for ch in value:
-                await page.keyboard.type(ch)
+                await kb.type(ch)
                 await asyncio.sleep(random.uniform(0.05, 0.18))
             await el.dispatch_event("input")
             await el.dispatch_event("change")
-            await page.keyboard.press("Tab")
+            await kb.press("Tab")
             await asyncio.sleep(random.uniform(0.1, 0.3))
         elif field_type == "check":
             el = page.locator(selector).first
@@ -927,13 +945,111 @@ class API:
             el = page.locator(selector).first
             await el.scroll_into_view_if_needed()
             await self._random_pause(short=True)
-            await el.click()
+            try:
+                el_info = await el.evaluate("""el => {
+                    const info = {tag: el.tagName, id: el.id, type: el.type,
+                        onclick: el.getAttribute('onclick'), value: el.value, href: el.href,
+                        html: el.outerHTML.substring(0, 200)};
+                    // Extract referenced JS function source
+                    const oc = el.getAttribute('onclick') || '';
+                    const fnMatch = oc.match(/^(\\w+)\\(/);
+                    if (fnMatch && typeof window[fnMatch[1]] === 'function')
+                        info.fn_source = window[fnMatch[1]].toString().substring(0, 500);
+                    return info;
+                }""")
+                print(f"[DEBUG] click_first target: {el_info}", flush=True)
+            except Exception:
+                pass
+            try:
+                await el.click(timeout=5000)
+            except Exception as e:
+                # Overlay intercepting pointer events (styled checkboxes, custom controls) — force click
+                msg = str(e).lower()
+                if "intercepts pointer events" in msg or "intercept" in msg:
+                    try:
+                        await el.click(force=True, timeout=3000)
+                        print(f"[DEBUG] click_first force-click succeeded", flush=True)
+                    except Exception as e2:
+                        try:
+                            await el.evaluate("el => el.click()")
+                            print(f"[DEBUG] click_first JS click succeeded", flush=True)
+                        except Exception as e3:
+                            print(f"[DEBUG] click_first all methods failed: {e3}", flush=True)
+                else:
+                    print(f"[DEBUG] click_first error: {e}", flush=True)
+        elif field_type == "js_eval":
+            # Execute arbitrary JS expression (e.g. "signUP('')")
+            print(f"[DEBUG] js_eval: {selector}", flush=True)
+            try:
+                await page.evaluate(selector)
+            except Exception as e:
+                print(f"[DEBUG] js_eval error: {e}", flush=True)
+        elif field_type == "click_nav":
+            el = page.locator(selector).first
+            await el.scroll_into_view_if_needed()
+            await self._random_pause(short=True)
+            try:
+                await el.click()
+            except Exception as e:
+                print(f"[DEBUG] click_nav click error (expected if page navigated): {e}", flush=True)
+            await asyncio.sleep(2)
+            try:
+                await page.wait_for_load_state("domcontentloaded", timeout=10000)
+            except Exception:
+                print("[DEBUG] click_nav wait_for_load_state failed (page may have changed)", flush=True)
+        elif field_type == "click_popup":
+            # Intercept window.open before clicking, capture the URL, then navigate
+            try:
+                # Monkey-patch window.open to capture URL instead of opening popup
+                await page.evaluate("""() => {
+                    window.__popupUrl = null;
+                    window.__origOpen = window.open;
+                    window.open = function(url, name, features) {
+                        window.__popupUrl = url;
+                        return { document: { write: function(){}, close: function(){} }, close: function(){}, focus: function(){} };
+                    };
+                }""")
+                el = page.locator(selector).first
+                await el.scroll_into_view_if_needed()
+                await self._random_pause(short=True)
+                await el.click()
+                await asyncio.sleep(2)
+                popup_url = await page.evaluate("window.__popupUrl")
+                print(f"[DEBUG] Intercepted popup URL: {popup_url}", flush=True)
+                # Restore original window.open
+                await page.evaluate("if(window.__origOpen) window.open = window.__origOpen;")
+                if popup_url:
+                    if not popup_url.startswith("http"):
+                        base = page.url.split("//")[0] + "//" + page.url.split("//")[1].split("/")[0]
+                        popup_url = base + ("/" if not popup_url.startswith("/") else "") + popup_url
+                    print(f"[DEBUG] Navigating to: {popup_url}", flush=True)
+                    await page.goto(popup_url, wait_until="domcontentloaded", timeout=15000)
+                else:
+                    print("[DEBUG] No popup URL intercepted, trying direct signUP call", flush=True)
+                    # Try extracting from signUP function source
+                    reg_url = await page.evaluate("""() => {
+                        if (typeof signUP === 'function') {
+                            const src = signUP.toString();
+                            const m = src.match(/['"]([^'"]*(?:regist|signup)[^'"]*)['"]/i);
+                            if (m) return m[1];
+                        }
+                        return null;
+                    }""")
+                    if reg_url:
+                        if not reg_url.startswith("http"):
+                            base = page.url.split("//")[0] + "//" + page.url.split("//")[1].split("/")[0]
+                            reg_url = base + ("/" if not reg_url.startswith("/") else "") + reg_url
+                        print(f"[DEBUG] Navigating to extracted URL: {reg_url}", flush=True)
+                        await page.goto(reg_url, wait_until="domcontentloaded", timeout=15000)
+            except Exception as e:
+                print(f"[DEBUG] click_popup error: {e}", flush=True)
         elif field_type == "autocomplete":
+            kb = self._kb(page)
             await page.click(selector)
             await page.fill(selector, "")
             await self._random_pause(short=True)
             for ch in value:
-                await page.keyboard.type(ch)
+                await kb.type(ch)
                 await asyncio.sleep(random.uniform(0.05, 0.18))
             el = page.locator(selector).first
             await el.dispatch_event("input")
@@ -944,8 +1060,8 @@ class API:
                 await self._random_pause(short=True)
                 await dropdown.click()
             except Exception:
-                await page.keyboard.press("ArrowDown")
-                await page.keyboard.press("Enter")
+                await kb.press("ArrowDown")
+                await kb.press("Enter")
             await self._random_pause(short=True)
         elif field_type == "file_upload":
             id_folder = getattr(self, "_cur_settings", {}).get("id_folder", "")
@@ -956,7 +1072,26 @@ class API:
             if not file_path.exists():
                 self._emit("log", {"lvl": "warn", "msg": f"    File not found: {file_path}"})
                 return
+            # Diagnose which element matched
+            try:
+                count = await page.locator(selector).count()
+                if count == 0:
+                    self._emit("log", {"lvl": "error", "msg": f"    file_upload: no element matched {selector}"})
+                    return
+                el_info = await page.locator(selector).first.evaluate(
+                    "el => ({tag: el.tagName, id: el.id, type: el.type, name: el.name})"
+                )
+                print(f"[DEBUG] file_upload target (matches={count}): {el_info}", flush=True)
+            except Exception as diag_err:
+                print(f"[DEBUG] file_upload diag error: {diag_err}", flush=True)
             await page.set_input_files(selector, str(file_path))
+            try:
+                el = page.locator(selector).first
+                await el.dispatch_event("change")
+                await el.dispatch_event("input")
+            except Exception:
+                pass
+            await asyncio.sleep(3)
         elif field_type == "date":
             parts = value.split("/")
             if len(parts) == 3:
@@ -981,55 +1116,116 @@ class API:
             browser = await pw.chromium.connect_over_cdp(ws)
             ctx  = browser.contexts[0] if browser.contexts else await browser.new_context()
             page = ctx.pages[0] if ctx.pages else await ctx.new_page()
+            _disconnected = {"flag": False}
             page.on("close", lambda: print("[WARN] Page was closed!", flush=True))
             page.on("crash", lambda: print("[WARN] Page crashed!", flush=True))
-            browser.on("disconnected", lambda: print("[WARN] Browser disconnected!", flush=True))
+            def _on_disconnect():
+                _disconnected["flag"] = True
+                print("[WARN] Browser disconnected!", flush=True)
+            browser.on("disconnected", _on_disconnect)
             url = settings["registration_url"]
             self._emit("log", {"lvl": "info", "msg": f"    Navigating to {url}"})
+            resp = None
             try:
                 resp = await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
             except PWTimeout:
                 return False, "Site unreachable — page load timed out (profile may lack access)"
             except Exception as nav_err:
-                return False, f"Site unreachable — {nav_err}"
+                print(f"[DEBUG] goto threw: {nav_err}, disconnected={_disconnected['flag']}", flush=True)
+                if not _disconnected["flag"]:
+                    await asyncio.sleep(3)
+                if _disconnected["flag"]:
+                    self._emit("log", {"lvl": "info", "msg": f"    CDP disconnected during navigation, reconnecting..."})
+                    await asyncio.sleep(3)
+                    import re as _re
+                    port_match = _re.search(r':(\d{4,5})/', ws)
+                    port_num = int(port_match.group(1)) if port_match else None
+                    new_ws = None
+                    if port_num:
+                        for _retry in range(5):
+                            try:
+                                async with aiohttp.ClientSession() as _s:
+                                    async with _s.get(f"http://127.0.0.1:{port_num}/json/version", timeout=aiohttp.ClientTimeout(total=3)) as _r:
+                                        if _r.status == 200:
+                                            _data = await _r.json(content_type=None)
+                                            new_ws = _data.get("webSocketDebuggerUrl", "")
+                                            if new_ws:
+                                                break
+                            except Exception:
+                                pass
+                            await asyncio.sleep(1)
+                    print(f"[DEBUG] Fresh WS after goto: {new_ws}", flush=True)
+                    if not new_ws:
+                        return False, "Browser process unreachable after navigation disconnect"
+                    try:
+                        browser = await pw.chromium.connect_over_cdp(new_ws)
+                        ws = new_ws
+                        _disconnected["flag"] = False
+                        ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
+                        page = ctx.pages[-1] if ctx.pages else await ctx.new_page()
+                        page.on("close", lambda: print("[WARN] Page was closed!", flush=True))
+                        def _on_disconnect_nav():
+                            _disconnected["flag"] = True
+                            print("[WARN] Browser disconnected!", flush=True)
+                        browser.on("disconnected", _on_disconnect_nav)
+                        await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                        self._emit("log", {"lvl": "info", "msg": f"    Reconnected after goto! Page: {page.url[:80]}"})
+                    except Exception as reconn_err:
+                        return False, f"Reconnect after navigation failed: {reconn_err}"
+                else:
+                    return False, f"Site unreachable — {nav_err}"
 
             # Check if navigation opened a new tab
-            await asyncio.sleep(1)
-            if len(ctx.pages) > 1 and ctx.pages[-1] != page:
-                page = ctx.pages[-1]
-                self._emit("log", {"lvl": "info", "msg": f"    Switched to new tab after navigation"})
-                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+            if not _disconnected["flag"]:
+                await asyncio.sleep(1)
+                try:
+                    if len(ctx.pages) > 1 and ctx.pages[-1] != page:
+                        page = ctx.pages[-1]
+                        self._emit("log", {"lvl": "info", "msg": f"    Switched to new tab after navigation"})
+                        await page.wait_for_load_state("domcontentloaded", timeout=15_000)
 
-            if page.is_closed():
-                if len(ctx.pages) > 0:
-                    page = ctx.pages[-1]
-                    self._emit("log", {"lvl": "info", "msg": f"    Original page closed, switched to active page"})
-                    await page.wait_for_load_state("domcontentloaded", timeout=15_000)
-                else:
-                    return False, "Page closed unexpectedly"
+                    if page.is_closed():
+                        if len(ctx.pages) > 0:
+                            page = ctx.pages[-1]
+                            self._emit("log", {"lvl": "info", "msg": f"    Original page closed, switched to active page"})
+                            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                        else:
+                            return False, "Page closed unexpectedly"
+                except Exception:
+                    pass
 
             if resp and resp.status in (403, 451, 503):
                 return False, f"Site blocked (HTTP {resp.status}) - this profile may not have access"
 
-            blocked = await page.evaluate("""() => {
-                const t = document.title.toLowerCase();
-                const b = document.body ? document.body.innerText.substring(0, 500).toLowerCase() : '';
-                if (t.includes('access denied') || t.includes('blocked') || t.includes('forbidden')
-                    || t.includes('not available') || t.includes('geo') || t.includes('restricted'))
-                    return true;
-                if (b.includes('access denied') || b.includes('not available in your')
-                    || b.includes('geo-restrict') || b.includes('blocked')
-                    || b.includes('this site is not accessible') || b.includes('your region'))
-                    return true;
-                return false;
-            }""")
-            if blocked:
-                return False, "Site not accessible from this profile — geo-blocked or restricted"
+            try:
+                blocked = await page.evaluate("""() => {
+                    const t = document.title.toLowerCase();
+                    const b = document.body ? document.body.innerText.substring(0, 500).toLowerCase() : '';
+                    if (t.includes('access denied') || t.includes('blocked') || t.includes('forbidden')
+                        || t.includes('not available') || t.includes('geo') || t.includes('restricted'))
+                        return true;
+                    if (b.includes('access denied') || b.includes('not available in your')
+                        || b.includes('geo-restrict') || b.includes('blocked')
+                        || b.includes('this site is not accessible') || b.includes('your region'))
+                        return true;
+                    return false;
+                }""")
+                if blocked:
+                    return False, "Site not accessible from this profile — geo-blocked or restricted"
+            except Exception:
+                if _disconnected["flag"]:
+                    pass  # already disconnected, will be handled later
+                else:
+                    return False, "Cannot evaluate page — possible disconnect"
 
             await self._inject_cursor(page)
             await self._random_pause()
 
             steps = settings.get("steps") or []
+
+            # Listen for popups (new windows opened by JS)
+            popup_pages = []
+            ctx.on("page", lambda p: popup_pages.append(p))
 
             if steps:
                 for si, step in enumerate(steps):
@@ -1040,6 +1236,45 @@ class API:
 
                     self._emit("log", {"lvl": "info", "msg": f"  Step {si+1}: {step.get('name', f'Page {si+1}')}"})
                     await self._random_pause()
+
+                    # Resolve iframe if step requires it
+                    iframe_sel = step.get("iframe", "")
+                    target = page  # default: operate on main page
+                    if iframe_sel:
+                        try:
+                            iframe_el = page.locator(iframe_sel)
+                            await iframe_el.wait_for(state="visible", timeout=20_000)
+                            # Get iframe src to find the Frame object by URL
+                            iframe_src = await iframe_el.get_attribute("src") or ""
+                            print(f"[DEBUG] Iframe src: {iframe_src}", flush=True)
+                            frame = None
+                            # Try by URL match first
+                            if iframe_src:
+                                for f in page.frames:
+                                    if iframe_src in (f.url or ""):
+                                        frame = f
+                                        break
+                            # Fallback: try by name/id
+                            if not frame:
+                                iframe_name = await iframe_el.get_attribute("name") or await iframe_el.get_attribute("id") or ""
+                                if iframe_name:
+                                    frame = page.frame(name=iframe_name)
+                            # Fallback: second frame (first is main)
+                            if not frame and len(page.frames) > 1:
+                                frame = page.frames[1]
+                            if frame:
+                                target = frame
+                                self._emit("log", {"lvl": "info", "msg": f"    Using iframe: {iframe_sel} -> {frame.url[:80]}"})
+                                await frame.wait_for_load_state("domcontentloaded", timeout=15_000)
+                            else:
+                                self._emit("log", {"lvl": "warn", "msg": f"    Iframe {iframe_sel} found but no Frame object (frames: {len(page.frames)})"})
+                        except Exception as iframe_err:
+                            if optional:
+                                self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped (iframe not found)"})
+                                continue
+                            self._emit("log", {"lvl": "error", "msg": f"    Iframe {iframe_sel} not available: {iframe_err}"})
+                            raise
+
                     await self._inject_cursor(page)
 
                     try:
@@ -1057,28 +1292,90 @@ class API:
 
                             if optional:
                                 try:
-                                    await page.wait_for_selector(sel, timeout=8000)
+                                    await target.wait_for_selector(sel, timeout=8000)
                                 except PWTimeout:
                                     self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped"})
                                     raise _SkipStep()
 
-                            if ftype in ("radio", "click", "click_first"):
+                            if ftype == "click_popup":
                                 self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {sel[:60]}"})
-                                await self._apply_field(page, sel, "", ftype)
+                                popup_page = await self._apply_field(page, sel, "", ftype)
+                                if popup_page:
+                                    page = popup_page
+                                    target = page
+                                    self._emit("log", {"lvl": "info", "msg": f"    Switched to popup window"})
+                                    await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                            elif ftype in ("radio", "click", "click_first", "click_nav", "js_eval"):
+                                self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {sel[:60]}"})
+                                try:
+                                    await self._apply_field(target, sel, "", ftype)
+                                except Exception as click_ex:
+                                    print(f"[DEBUG] {ftype} threw: {click_ex}", flush=True)
+                                # After click on main page, wait for potential disconnect
+                                if not iframe_sel:
+                                    for _dw in range(8):
+                                        await asyncio.sleep(1)
+                                        if _disconnected["flag"]:
+                                            break
+                                    print(f"[DEBUG] After {ftype}: flag={_disconnected['flag']}, waited={_dw+1}s", flush=True)
+                                else:
+                                    await asyncio.sleep(0.5)
+                                connected = not _disconnected["flag"]
+                                if not connected:
+                                    self._emit("log", {"lvl": "info", "msg": f"    Browser disconnected after {ftype}, reconnecting..."})
+                                    await asyncio.sleep(3)
+                                    # Fetch fresh websocket URL from browser debug endpoint
+                                    import re as _re
+                                    port_match = _re.search(r':(\d{4,5})/', ws)
+                                    port_num = int(port_match.group(1)) if port_match else None
+                                    new_ws = None
+                                    if port_num:
+                                        for _retry in range(5):
+                                            try:
+                                                async with aiohttp.ClientSession() as _s:
+                                                    async with _s.get(f"http://127.0.0.1:{port_num}/json/version", timeout=aiohttp.ClientTimeout(total=3)) as _r:
+                                                        if _r.status == 200:
+                                                            _data = await _r.json(content_type=None)
+                                                            new_ws = _data.get("webSocketDebuggerUrl", "")
+                                                            if new_ws:
+                                                                break
+                                            except Exception:
+                                                pass
+                                            await asyncio.sleep(1)
+                                    print(f"[DEBUG] Fresh WS URL: {new_ws}", flush=True)
+                                    if not new_ws:
+                                        self._emit("log", {"lvl": "error", "msg": f"    Cannot get fresh WS URL from port {port_num}"})
+                                        raise Exception("Browser process unreachable for reconnect")
+                                    try:
+                                        browser = await pw.chromium.connect_over_cdp(new_ws)
+                                        ws = new_ws
+                                        _disconnected["flag"] = False
+                                        ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
+                                        page = ctx.pages[-1] if ctx.pages else await ctx.new_page()
+                                        page.on("close", lambda: print("[WARN] Page was closed!", flush=True))
+                                        def _on_disconnect2():
+                                            _disconnected["flag"] = True
+                                            print("[WARN] Browser disconnected!", flush=True)
+                                        browser.on("disconnected", _on_disconnect2)
+                                        await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                                        self._emit("log", {"lvl": "info", "msg": f"    Reconnected! Page: {page.url[:80]}"})
+                                    except Exception as reconn_err:
+                                        self._emit("log", {"lvl": "error", "msg": f"    Reconnect failed: {reconn_err}"})
+                                        raise
                             elif ftype == "check":
                                 val = self._resolve_value(col, row) if col else ""
                                 self._emit("log", {"lvl": "info", "msg": f"    check: {sel[:60]}"})
-                                await self._apply_field(page, sel, val, ftype)
+                                await self._apply_field(target, sel, val, ftype)
                             elif ftype == "radio_map":
                                 val = self._resolve_value(col, row) if col else ""
                                 if val:
                                     self._emit("log", {"lvl": "info", "msg": f"    radio_map: {val} -> {sel[:60]}"})
-                                    await self._apply_field(page, sel, val, ftype, m)
+                                    await self._apply_field(target, sel, val, ftype, m)
                             elif ftype == "gogoal_dropdown":
                                 val = self._resolve_value(col, row) if col else ""
                                 if val:
                                     self._emit("log", {"lvl": "info", "msg": f"    gogoal_dropdown: {col} = {val}"})
-                                    await self._apply_field(page, sel, val, ftype, m)
+                                    await self._apply_field(target, sel, val, ftype, m)
                             else:
                                 fcfg = m.get("field_cfg", {})
                                 if col:
@@ -1089,36 +1386,158 @@ class API:
                                     val = ""
                                 if sel and val:
                                     self._emit("log", {"lvl": "info", "msg": f"    {ftype}: {col or '(fixed)'} -> {sel[:50]} = {val[:30]}"})
-                                    await self._apply_field(page, sel, val, ftype)
+                                    await self._apply_field(target, sel, val, ftype)
 
-                        # Check if a new tab opened after field actions
-                        if len(ctx.pages) > 1 and ctx.pages[-1] != page:
+                        # Check if browser disconnected and reconnect if needed
+                        await asyncio.sleep(0.5)
+                        if _disconnected["flag"]:
+                            self._emit("log", {"lvl": "info", "msg": f"    Browser disconnected (post-fields), reconnecting..."})
+                            await asyncio.sleep(2)
+                            import re as _re
+                            port_match = _re.search(r':(\d{4,5})/', ws)
+                            port_num = int(port_match.group(1)) if port_match else None
+                            new_ws = None
+                            if port_num:
+                                for _retry in range(5):
+                                    try:
+                                        async with aiohttp.ClientSession() as _s:
+                                            async with _s.get(f"http://127.0.0.1:{port_num}/json/version", timeout=aiohttp.ClientTimeout(total=3)) as _r:
+                                                if _r.status == 200:
+                                                    _data = await _r.json(content_type=None)
+                                                    new_ws = _data.get("webSocketDebuggerUrl", "")
+                                                    if new_ws:
+                                                        break
+                                    except Exception:
+                                        pass
+                                    await asyncio.sleep(1)
+                            try:
+                                browser = await pw.chromium.connect_over_cdp(new_ws or ws)
+                                ws = new_ws or ws
+                                _disconnected["flag"] = False
+                                ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
+                                page = ctx.pages[-1] if ctx.pages else await ctx.new_page()
+                                page.on("close", lambda: print("[WARN] Page was closed!", flush=True))
+                                def _on_disconnect_post():
+                                    _disconnected["flag"] = True
+                                    print("[WARN] Browser disconnected!", flush=True)
+                                browser.on("disconnected", _on_disconnect_post)
+                                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                                self._emit("log", {"lvl": "info", "msg": f"    Reconnected! Page: {page.url[:60]}"})
+                            except Exception as reconn_err:
+                                self._emit("log", {"lvl": "error", "msg": f"    Reconnect failed: {reconn_err}"})
+                                return False, f"Browser disconnected and reconnect failed"
+                        elif popup_pages:
+                            page = popup_pages[-1]
+                            popup_pages.clear()
+                            self._emit("log", {"lvl": "info", "msg": f"    Switched to popup window"})
+                            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                        elif page.is_closed() and len(ctx.pages) > 0:
+                            page = ctx.pages[-1]
+                            self._emit("log", {"lvl": "info", "msg": f"    Page closed, switched to remaining page"})
+                            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                        elif len(ctx.pages) > 1 and ctx.pages[-1] != page:
                             page = ctx.pages[-1]
                             self._emit("log", {"lvl": "info", "msg": f"    Switched to new tab"})
                             await page.wait_for_load_state("domcontentloaded", timeout=15_000)
 
                         if step_submit:
+                            self._emit("log", {"lvl": "info", "msg": f"    Clicking submit: {step_submit[:60]}"})
                             await self._random_pause()
-                            btn = page.locator(step_submit).first
                             try:
-                                await btn.scroll_into_view_if_needed(timeout=3000)
-                            except Exception:
-                                pass
-                            for _wait in range(15):
-                                if await btn.is_enabled():
-                                    break
-                                self._emit("log", {"lvl": "info", "msg": f"    Waiting for submit button to enable... ({_wait+1})"})
-                                await asyncio.sleep(1)
-                            else:
-                                self._emit("log", {"lvl": "warn", "msg": f"    Submit button still disabled after 15s"})
-                            await self._move_to_element(page, step_submit)
-                            await btn.click(timeout=15_000)
-                            if wait_sel:
-                                await page.wait_for_selector(wait_sel, timeout=15_000)
+                                btn = target.locator(step_submit).first
+                                await btn.wait_for(state="visible", timeout=10_000)
+                                try:
+                                    await btn.scroll_into_view_if_needed(timeout=3000)
+                                except Exception:
+                                    pass
+                                if not await btn.is_enabled():
+                                    for _wait in range(30):
+                                        await asyncio.sleep(1)
+                                        if await btn.is_enabled():
+                                            self._emit("log", {"lvl": "info", "msg": f"    Submit enabled after {_wait+1}s"})
+                                            break
+                                    else:
+                                        self._emit("log", {"lvl": "warn", "msg": f"    Submit button still disabled after 30s"})
+                                if not iframe_sel:
+                                    await self._move_to_element(page, step_submit)
+                                print(f"[DEBUG] Clicking submit button", flush=True)
+                                await btn.click(timeout=15_000)
+                                self._emit("log", {"lvl": "info", "msg": f"    Submit clicked"})
+                            except Exception as submit_err:
+                                print(f"[DEBUG] Submit error: {submit_err}, flag={_disconnected['flag']}", flush=True)
+                                if not _disconnected["flag"]:
+                                    raise
+                            await asyncio.sleep(1)
+                            if popup_pages:
+                                page = popup_pages[-1]
+                                target = page
+                                popup_pages.clear()
+                                self._emit("log", {"lvl": "info", "msg": f"    Switched to popup after submit"})
+                                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                            elif not iframe_sel and page.is_closed() and len(ctx.pages) > 0:
+                                page = ctx.pages[-1]
+                                target = page
+                                self._emit("log", {"lvl": "info", "msg": f"    Page closed after submit, switched"})
+                                await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                            elif wait_sel:
+                                await target.wait_for_selector(wait_sel, timeout=15_000)
+                            elif iframe_sel:
+                                await asyncio.sleep(2)
                             else:
                                 await page.wait_for_load_state("domcontentloaded", timeout=15_000)
                         elif wait_sel:
-                            await page.wait_for_selector(wait_sel, timeout=15_000)
+                            try:
+                                await target.wait_for_selector(wait_sel, timeout=15_000)
+                            except Exception as ws_err:
+                                print(f"[DEBUG] wait_after threw: {ws_err}, flag={_disconnected['flag']}", flush=True)
+                                if _disconnected["flag"]:
+                                    # Reconnect and check wait_sel on the new page
+                                    self._emit("log", {"lvl": "info", "msg": f"    CDP disconnected during wait_after, reconnecting..."})
+                                    await asyncio.sleep(3)
+                                    import re as _re
+                                    port_match = _re.search(r':(\d{4,5})/', ws)
+                                    port_num = int(port_match.group(1)) if port_match else None
+                                    new_ws = None
+                                    if port_num:
+                                        for _retry in range(5):
+                                            try:
+                                                async with aiohttp.ClientSession() as _s:
+                                                    async with _s.get(f"http://127.0.0.1:{port_num}/json/version", timeout=aiohttp.ClientTimeout(total=3)) as _r:
+                                                        if _r.status == 200:
+                                                            _data = await _r.json(content_type=None)
+                                                            new_ws = _data.get("webSocketDebuggerUrl", "")
+                                                            if new_ws:
+                                                                break
+                                            except Exception:
+                                                pass
+                                            await asyncio.sleep(1)
+                                    print(f"[DEBUG] Fresh WS after wait_after: {new_ws}", flush=True)
+                                    if new_ws:
+                                        try:
+                                            browser = await pw.chromium.connect_over_cdp(new_ws)
+                                            ws = new_ws
+                                            _disconnected["flag"] = False
+                                            ctx = browser.contexts[0] if browser.contexts else await browser.new_context()
+                                            page = ctx.pages[-1] if ctx.pages else await ctx.new_page()
+                                            page.on("close", lambda: print("[WARN] Page was closed!", flush=True))
+                                            def _on_disconnect_wa():
+                                                _disconnected["flag"] = True
+                                                print("[WARN] Browser disconnected!", flush=True)
+                                            browser.on("disconnected", _on_disconnect_wa)
+                                            await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+                                            self._emit("log", {"lvl": "info", "msg": f"    Reconnected after wait_after! Page: {page.url[:80]}"})
+                                            # Try wait_sel again on reconnected page
+                                            try:
+                                                await page.wait_for_selector(wait_sel, timeout=10_000)
+                                            except Exception:
+                                                self._emit("log", {"lvl": "warn", "msg": f"    wait_after selector not found after reconnect, continuing anyway"})
+                                        except Exception as reconn_err:
+                                            self._emit("log", {"lvl": "error", "msg": f"    Reconnect failed: {reconn_err}"})
+                                            raise
+                                    else:
+                                        raise Exception("Browser unreachable for reconnect after wait_after")
+                                else:
+                                    raise
                     except _SkipStep:
                         continue
 
