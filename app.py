@@ -7,6 +7,7 @@ import asyncio
 import csv
 import io
 import json
+import os
 import random
 import re
 import sys
@@ -14,6 +15,38 @@ import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
+
+
+# ── Packaging-aware paths ─────────────────────────────────────────────────────
+# When frozen by PyInstaller, bundled read-only resources (ui/, etc.) live under
+# sys._MEIPASS. Writable user state (settings.json, history, IDs/, CSV exports,
+# logs) lives per-user under %LOCALAPPDATA%\R-Bot\UserData so the install dir
+# can stay read-only without admin rights.
+_IS_FROZEN = bool(getattr(sys, "frozen", False))
+if _IS_FROZEN:
+    BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    EXE_DIR    = Path(sys.executable).parent
+else:
+    BUNDLE_DIR = Path(__file__).parent
+    EXE_DIR    = Path(__file__).parent
+
+_local_appdata = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+USER_DATA_DIR = Path(_local_appdata) / "R-Bot" / "UserData"
+try:
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    (USER_DATA_DIR / "IDs").mkdir(exist_ok=True)
+    (USER_DATA_DIR / "logs").mkdir(exist_ok=True)
+except Exception:
+    # Fall back to the exe folder if LOCALAPPDATA is unwritable
+    USER_DATA_DIR = EXE_DIR / "UserData"
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# Point Playwright at the chromium bundled next to the exe (the Inno Setup
+# installer ships it here). If the bundled folder is missing we leave the env
+# var alone so a dev run still resolves to ~/AppData/Local/ms-playwright/.
+_bundled_browsers = EXE_DIR / "playwright-browsers"
+if _bundled_browsers.is_dir() and not os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_bundled_browsers)
 
 import aiohttp
 import webview
@@ -23,9 +56,9 @@ from playwright.async_api import TimeoutError as PWTimeout
 
 from sites import SITES
 
-SETTINGS_FILE    = Path(__file__).parent / "settings.json"
-HISTORY_FILE     = Path(__file__).parent / "run_history.json"
-UI_FILE          = Path(__file__).parent / "ui" / "index.html"
+SETTINGS_FILE    = USER_DATA_DIR / "settings.json"
+HISTORY_FILE     = USER_DATA_DIR / "run_history.json"
+UI_FILE          = BUNDLE_DIR / "ui" / "index.html"
 GOLOGIN_API_BASE = "https://api.gologin.com"
 
 DEFAULT_SETTINGS = {
@@ -229,20 +262,34 @@ class API:
             loop.close()
 
     async def _fetch_profiles(self, token):
+        """
+        Fetch ALL profiles from GoLogin. The /browser/v2 endpoint paginates
+        with a server-side default page size of 30 — we must walk the pages,
+        otherwise the UI only ever shows the first 30 profiles regardless of
+        how many the account owns.
+        """
         headers = {"Authorization": f"Bearer {token}"}
+        PAGE_SIZE = 100       # GoLogin accepts up to a few hundred; 100 is safe.
+        MAX_PAGES = 200       # Hard safety cap → up to 20 000 profiles.
+        out = []
         try:
             async with aiohttp.ClientSession() as sess:
-                async with sess.get(
-                    f"{GOLOGIN_API_BASE}/browser/v2",
-                    headers=headers,
-                    timeout=aiohttp.ClientTimeout(total=20)
-                ) as r:
-                    if r.status == 401:
-                        return {"error": "Invalid API token - check GoLogin > Settings > API."}
-                    if r.status != 200:
-                        return {"error": f"GoLogin API error: HTTP {r.status}"}
-                    data = await r.json(content_type=None)
-                    # API may return {profiles: [...]} or a plain list
+                total_expected = None
+                for page in range(1, MAX_PAGES + 1):
+                    params = {"page": page, "limit": PAGE_SIZE}
+                    async with sess.get(
+                        f"{GOLOGIN_API_BASE}/browser/v2",
+                        headers=headers,
+                        params=params,
+                        timeout=aiohttp.ClientTimeout(total=30),
+                    ) as r:
+                        if r.status == 401:
+                            return {"error": "Invalid API token - check GoLogin > Settings > API."}
+                        if r.status != 200:
+                            return {"error": f"GoLogin API error: HTTP {r.status}"}
+                        data = await r.json(content_type=None)
+
+                    # Response shape: either a raw list, or a dict wrapping it.
                     if isinstance(data, list):
                         profiles = data
                     else:
@@ -251,8 +298,14 @@ class API:
                             data.get("items")    or
                             data.get("data")     or []
                         )
-                    # Normalise fields
-                    out = []
+                        # Capture total count on first page if present
+                        if total_expected is None:
+                            for k in ("allProfilesCount", "totalProfiles",
+                                      "profilesCount", "total", "count"):
+                                if isinstance(data.get(k), int):
+                                    total_expected = data[k]
+                                    break
+
                     for p in profiles:
                         proxy = p.get("proxy") or {}
                         proxy_str = ""
@@ -264,7 +317,14 @@ class API:
                             "notes": p.get("notes", ""),
                             "proxy": proxy_str,
                         })
-                    return {"profiles": out}
+
+                    # Stop when the page is short (last page) or we've hit the total.
+                    if len(profiles) < PAGE_SIZE:
+                        break
+                    if total_expected is not None and len(out) >= total_expected:
+                        break
+
+                return {"profiles": out}
         except aiohttp.ClientConnectorError:
             return {"error": "No internet connection — cannot reach GoLogin API."}
         except Exception as e:
@@ -826,6 +886,143 @@ class API:
         else:
             await asyncio.sleep(random.uniform(0.8, 2.0))
 
+    async def _diagnose_submit_button(self, page, selector):
+        """
+        Inspect a submit button that is reported disabled and emit the root cause.
+        Read-only: never clicks, never bypasses validation.
+        Reports: locator match count & per-match state, aria/disabled, visibility/occlusion,
+        enclosing form validity, invalid/pending/required form controls.
+
+        The selector arg is a Playwright selector (may use :has-text() and other
+        engines beyond CSS), so we resolve matches through Playwright's locator API
+        and then hand the real DOM elements to an in-page evaluator.
+        """
+        describe_js = """(nodes) => {
+                    const out = {matches: [], form: null, invalid: [], pending: [], required_empty: [], occluder: null};
+                    out.match_count = nodes.length;
+                    const describe = (el) => {
+                        const r = el.getBoundingClientRect();
+                        const cs = getComputedStyle(el);
+                        const native = el.matches('button,input') ? el : el.querySelector('button,input');
+                        return {
+                            tag: el.tagName,
+                            text: (el.innerText || '').trim().slice(0, 60),
+                            classes: el.className,
+                            disabled_prop: !!(native && native.disabled),
+                            aria_disabled: el.getAttribute('aria-disabled'),
+                            has_mat_disabled_class: /\\bmat-(mdc-)?button-disabled\\b/.test(el.className)
+                                || (native ? /\\bmat-(mdc-)?button-disabled\\b/.test(native.className) : false),
+                            visible: r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none',
+                            in_viewport: r.top >= 0 && r.left >= 0
+                                && r.bottom <= (window.innerHeight || document.documentElement.clientHeight)
+                                && r.right <= (window.innerWidth || document.documentElement.clientWidth),
+                            rect: {x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width), h: Math.round(r.height)},
+                        };
+                    };
+                    nodes.slice(0, 5).forEach(el => out.matches.push(describe(el)));
+
+                    const btn = nodes[0];
+                    if (btn) {
+                        const r = btn.getBoundingClientRect();
+                        const cx = Math.round(r.x + r.width / 2);
+                        const cy = Math.round(r.y + r.height / 2);
+                        const top = document.elementFromPoint(cx, cy);
+                        if (top && top !== btn && !btn.contains(top) && !top.contains(btn)) {
+                            out.occluder = {
+                                tag: top.tagName,
+                                id: top.id,
+                                classes: top.className,
+                                text: (top.innerText || '').trim().slice(0, 60),
+                            };
+                        }
+                        const form = btn.closest('form');
+                        if (form) {
+                            out.form = {
+                                classes: form.className,
+                                ng_invalid: form.classList.contains('ng-invalid'),
+                                ng_pending: form.classList.contains('ng-pending'),
+                                ng_dirty: form.classList.contains('ng-dirty'),
+                                ng_touched: form.classList.contains('ng-touched'),
+                            };
+                        }
+                    }
+
+                    // Angular Material / reactive-form field diagnostics via CSS classes
+                    const fields = Array.from(document.querySelectorAll('[formcontrolname]'));
+                    for (const f of fields) {
+                        const name = f.getAttribute('formcontrolname') || '';
+                        const cls = f.className || '';
+                        const invalid = cls.includes('ng-invalid');
+                        const pending = cls.includes('ng-pending');
+                        if (invalid) {
+                            let val = '';
+                            const inp = f.matches('input,select,textarea') ? f : f.querySelector('input,select,textarea');
+                            if (inp) val = (inp.value || '').slice(0, 40);
+                            const req = (inp && (inp.required || inp.getAttribute('aria-required') === 'true'))
+                                        || f.getAttribute('aria-required') === 'true';
+                            out.invalid.push({name, tag: f.tagName, has_value: !!val, value_preview: val, required: !!req, classes: cls.slice(0, 120)});
+                            if (req && !val) out.required_empty.push(name);
+                        }
+                        if (pending) out.pending.push(name);
+                    }
+
+                    // Mat-form-field level invalid flag (covers checkboxes/radios where class lives on wrapper)
+                    const matInvalid = Array.from(document.querySelectorAll('.mat-form-field-invalid, .mat-mdc-form-field-invalid'));
+                    out.mat_form_field_invalid_count = matInvalid.length;
+
+                    return out;
+                }"""
+        try:
+            handles = await page.locator(selector).element_handles()
+            # Each ElementHandle in the list is serialized to its real DOM node
+            # when the list is passed as a single arg to evaluate().
+            report = await page.evaluate(describe_js, handles[:5])
+        except Exception as diag_err:
+            self._emit("log", {"lvl": "warn", "msg": f"    diagnose: evaluate failed: {diag_err}"})
+            return
+
+        mc = report.get("match_count", 0)
+        self._emit("log", {"lvl": "warn", "msg": f"    diagnose: selector matched {mc} element(s)"})
+        for i, m in enumerate(report.get("matches", [])):
+            self._emit("log", {"lvl": "warn", "msg": (
+                f"      [{i}] <{m.get('tag')}> text='{m.get('text')}' "
+                f"disabled={m.get('disabled_prop')} aria-disabled={m.get('aria_disabled')} "
+                f"mat-disabled-class={m.get('has_mat_disabled_class')} "
+                f"visible={m.get('visible')} in_viewport={m.get('in_viewport')} rect={m.get('rect')}"
+            )})
+        occ = report.get("occluder")
+        if occ:
+            self._emit("log", {"lvl": "warn", "msg": (
+                f"    diagnose: button covered by <{occ.get('tag')}> "
+                f"id='{occ.get('id')}' classes='{str(occ.get('classes'))[:80]}' "
+                f"text='{occ.get('text')}'"
+            )})
+        form = report.get("form")
+        if form:
+            self._emit("log", {"lvl": "warn", "msg": (
+                f"    diagnose: enclosing form ng-invalid={form.get('ng_invalid')} "
+                f"ng-pending={form.get('ng_pending')} ng-touched={form.get('ng_touched')}"
+            )})
+        pending = report.get("pending") or []
+        if pending:
+            self._emit("log", {"lvl": "warn", "msg": f"    diagnose: async-pending controls: {pending}"})
+        req_empty = report.get("required_empty") or []
+        if req_empty:
+            self._emit("log", {"lvl": "warn", "msg": f"    diagnose: REQUIRED controls with empty value: {req_empty}"})
+        invalid = report.get("invalid") or []
+        for ctl in invalid[:12]:
+            self._emit("log", {"lvl": "warn", "msg": (
+                f"      invalid: {ctl.get('name')} tag={ctl.get('tag')} "
+                f"required={ctl.get('required')} has_value={ctl.get('has_value')} "
+                f"value='{ctl.get('value_preview')}'"
+            )})
+        if report.get("mat_form_field_invalid_count"):
+            self._emit("log", {"lvl": "warn", "msg": (
+                f"    diagnose: {report['mat_form_field_invalid_count']} mat-form-field marked invalid"
+            )})
+        if not form and not invalid and not pending and mc == 0:
+            self._emit("log", {"lvl": "warn", "msg": "    diagnose: no match + no form state — selector likely wrong page/wrong button"})
+
     async def _apply_field(self, page, selector, value, field_type, field_cfg=None):
         """Apply a single field action based on its type."""
         field_type = (field_type or "fill").lower()
@@ -1068,7 +1265,7 @@ class API:
             if id_folder:
                 file_path = Path(id_folder) / value
             else:
-                file_path = Path(__file__).parent / "IDs" / value
+                file_path = USER_DATA_DIR / "IDs" / value
             if not file_path.exists():
                 self._emit("log", {"lvl": "warn", "msg": f"    File not found: {file_path}"})
                 return
@@ -1458,6 +1655,7 @@ class API:
                                             break
                                     else:
                                         self._emit("log", {"lvl": "warn", "msg": f"    Submit button still disabled after 30s"})
+                                        await self._diagnose_submit_button(target, step_submit)
                                 if not iframe_sel:
                                     await self._move_to_element(page, step_submit)
                                 print(f"[DEBUG] Clicking submit button", flush=True)
@@ -1605,16 +1803,39 @@ class API:
 
 
 # ── Launch ────────────────────────────────────────────────────────────────────
-api    = API()
-window = webview.create_window(
-    title    = "Registration Bot",
-    url      = str(UI_FILE),
-    js_api   = api,
-    width    = 1200,
-    height   = 760,
-    min_size = (900, 600),
-)
-api._window = window
+def _fatal(msg: str) -> None:
+    """Show an error dialog, log to %LOCALAPPDATA%\\R-Bot\\UserData\\logs\\fatal.log, exit non-zero."""
+    try:
+        (USER_DATA_DIR / "logs").mkdir(parents=True, exist_ok=True)
+        with open(USER_DATA_DIR / "logs" / "fatal.log", "a", encoding="utf-8") as fh:
+            fh.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {msg}\n")
+    except Exception:
+        pass
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, msg, "R-Bot — Startup error", 0x10)
+    except Exception:
+        print(msg, file=sys.stderr)
+    sys.exit(1)
+
+
+try:
+    api    = API()
+    window = webview.create_window(
+        title    = "Registration Bot",
+        url      = str(UI_FILE),
+        js_api   = api,
+        width    = 1200,
+        height   = 760,
+        min_size = (900, 600),
+    )
+    api._window = window
+except Exception as _startup_err:
+    _fatal(f"Failed to create the application window:\n\n{_startup_err}\n\n{traceback.format_exc()}")
+
 
 if __name__ == "__main__":
-    webview.start()
+    try:
+        webview.start()
+    except Exception as _run_err:
+        _fatal(f"The application crashed:\n\n{_run_err}\n\n{traceback.format_exc()}")

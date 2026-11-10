@@ -9,3 +9,14 @@ run_*.log
 node_modules/
 .venv/
 venv/
+
+# Build artifacts (PyInstaller + Inno Setup)
+build/
+dist/
+.build-venv/
+playwright-browsers/
+
+# Per-user data — never commit
+IDs/
+*.csv
+*.md

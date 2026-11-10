@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="160" viewBox="0 0 280 160">
+  <defs><linearGradient id="g4" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#0A4D2E"/><stop offset="100%" stop-color="#0D7A47"/></linearGradient></defs>
+  <rect width="280" height="160" rx="12" fill="url(#g4)"/>
+  <text x="140" y="72" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" font-weight="bold" fill="#FFFFFF">BET</text>
+  <text x="140" y="100" text-anchor="middle" font-family="Arial,sans-serif" font-size="24" font-weight="bold" fill="#FFD700">FLAG</text>
+  <rect x="95" y="112" width="90" height="3" rx="1.5" fill="#FFFFFF" opacity="0.4"/>
+</svg>

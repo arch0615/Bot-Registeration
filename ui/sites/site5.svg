@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="280" height="160" viewBox="0 0 280 160">
+  <defs><linearGradient id="g5" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#1A1A2E"/><stop offset="100%" stop-color="#16213E"/></linearGradient></defs>
+  <rect width="280" height="160" rx="12" fill="url(#g5)"/>
+  <text x="140" y="85" text-anchor="middle" font-family="Arial,sans-serif" font-size="26" font-weight="bold" fill="#E94560">sportium</text>
+  <rect x="85" y="100" width="110" height="3" rx="1.5" fill="#E94560" opacity="0.5"/>
+</svg>
