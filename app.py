@@ -197,9 +197,11 @@ class API:
         return None
 
     def load_csv_from_path(self, path):
-        if path and Path(path).exists():
-            return self._load_path(path)
-        return None
+        if not path:
+            return None
+        if not Path(path).exists():
+            return {"error": f"CSV not found: {path}"}
+        return self._load_path(path)
 
     def load_csv_from_text(self, text, filename=""):
         try:
@@ -212,20 +214,30 @@ class API:
         except Exception as e:
             return {"error": str(e)}
 
+    # Common CSV encodings exported by Excel / Italian Windows. Tried in order;
+    # latin-1 is the final fallback because it is single-byte and never raises.
+    _CSV_ENCODINGS = ("utf-8-sig", "utf-8", "cp1252", "latin-1")
+
     def _load_path(self, path):
-        try:
-            with open(path, newline="", encoding="utf-8-sig") as f:
-                reader  = csv.DictReader(f)
-                headers = list(reader.fieldnames or [])
-                rows    = [dict(r) for r in reader]
-            self._headers = headers
-            self._rows    = rows
-            s = self.load_settings()
-            s["last_csv"] = str(path)
-            self.save_settings(s)
-            return {"headers": headers, "rows": rows, "path": str(path)}
-        except Exception as e:
-            return {"error": str(e)}
+        last_err = None
+        for enc in self._CSV_ENCODINGS:
+            try:
+                with open(path, newline="", encoding=enc) as f:
+                    reader  = csv.DictReader(f)
+                    headers = list(reader.fieldnames or [])
+                    rows    = [dict(r) for r in reader]
+                self._headers = headers
+                self._rows    = rows
+                s = self.load_settings()
+                s["last_csv"] = str(path)
+                self.save_settings(s)
+                return {"headers": headers, "rows": rows, "path": str(path), "encoding": enc}
+            except UnicodeDecodeError as e:
+                last_err = f"{enc}: {e}"
+                continue
+            except Exception as e:
+                return {"error": str(e)}
+        return {"error": f"Could not decode CSV with any known encoding. Last error — {last_err}"}
 
     def update_table(self, headers, rows):
         self._headers = list(headers)
@@ -1289,6 +1301,38 @@ class API:
             except Exception:
                 pass
             await asyncio.sleep(3)
+        elif field_type == "doc_upload":
+            id_folder = getattr(self, "_cur_settings", {}).get("id_folder", "")
+            front_file = value.strip()
+            if not front_file:
+                self._emit("log", {"lvl": "warn", "msg": "    No front image specified, skipping doc upload"})
+                return
+            if id_folder:
+                front_path = Path(id_folder) / front_file
+            else:
+                front_path = USER_DATA_DIR / "IDs" / front_file
+            if not front_path.exists():
+                self._emit("log", {"lvl": "warn", "msg": f"    Front image not found: {front_path}"})
+                return
+            self._emit("log", {"lvl": "info", "msg": f"    Uploading document: {front_path.name}"})
+            try:
+                async with page.expect_file_chooser(timeout=10000) as fc_info:
+                    await page.click(selector, timeout=5000)
+                file_chooser = await fc_info.value
+                await file_chooser.set_files(str(front_path))
+                self._emit("log", {"lvl": "info", "msg": f"    Document uploaded successfully"})
+                await asyncio.sleep(5)
+                # Check if registration failure page appeared after upload
+                fail_el = page.locator("text=La registrazione non è andata a buon fine")
+                try:
+                    await fail_el.wait_for(state="visible", timeout=5000)
+                    raise Exception("DOC_UPLOAD_FAIL: Registration failed after document upload")
+                except PWTimeout:
+                    pass
+            except Exception as e:
+                if "DOC_UPLOAD_FAIL" in str(e):
+                    raise
+                self._emit("log", {"lvl": "warn", "msg": f"    Doc upload error: {e}"})
         elif field_type == "date":
             parts = value.split("/")
             if len(parts) == 3:
@@ -1430,6 +1474,7 @@ class API:
                     step_submit = step.get("submit_selector", "")
                     wait_sel    = step.get("wait_after", "")
                     optional    = step.get("optional", False)
+                    fail_sel    = step.get("fail_selector", "")
 
                     self._emit("log", {"lvl": "info", "msg": f"  Step {si+1}: {step.get('name', f'Page {si+1}')}"})
                     await self._random_pause()
@@ -1736,6 +1781,15 @@ class API:
                                         raise Exception("Browser unreachable for reconnect after wait_after")
                                 else:
                                     raise
+
+                        # Check for registration-failure page if step defines a fail_selector
+                        if fail_sel:
+                            try:
+                                await page.locator(fail_sel).first.wait_for(state="visible", timeout=3000)
+                                self._emit("log", {"lvl": "error", "msg": f"    Failure page detected: {fail_sel[:60]}"})
+                                raise Exception(f"DOC_UPLOAD_FAIL: Failure page detected after step {step.get('name', '')}")
+                            except PWTimeout:
+                                pass
                     except _SkipStep:
                         continue
 
@@ -1791,9 +1845,12 @@ class API:
         except PWTimeout:
             return False, "Timed out waiting for success indicator"
         except Exception as e:
+            msg = str(e)
+            if "DOC_UPLOAD_FAIL" in msg:
+                return False, "Registration failed after document upload"
             print(f"[ERROR] _fill exception: {e}", flush=True)
             traceback.print_exc()
-            return False, str(e)
+            return False, msg
         finally:
             if browser:
                 try:

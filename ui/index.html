@@ -666,6 +666,7 @@ window.addEventListener('pywebviewready', async () => {
   if (state.settings.last_csv) {
     const r = await api('load_csv_from_path', state.settings.last_csv);
     if (r && !r.error) applyCSV(r);
+    else if (r && r.error) showStatus('Could not load previous CSV: ' + r.error);
   }
   document.getElementById('profilesToken').value = state.settings.gologin_api_token || '';
 });
@@ -674,6 +675,7 @@ window.addEventListener('pywebviewready', async () => {
 document.getElementById('btnPickFile').addEventListener('click', async () => {
   const r = await api('pick_csv_file');
   if (r && !r.error) applyCSV(r);
+  else if (r && r.error) showStatus('Could not open CSV: ' + r.error);
 });
 document.getElementById('btnPickIdFolder').addEventListener('click', async () => {
   const r = await api('pick_id_folder');
@@ -701,7 +703,7 @@ dropZone.addEventListener('drop', e => {
   e.preventDefault(); dropZone.classList.remove('over');
   const file = e.dataTransfer.files[0]; if (!file) return;
   const fr = new FileReader();
-  fr.onload = async ev => { const r = await api('load_csv_from_text', ev.target.result, file.name); if (r && !r.error) applyCSV(r); };
+  fr.onload = async ev => { const r = await api('load_csv_from_text', ev.target.result, file.name); if (r && !r.error) applyCSV(r); else if (r && r.error) showStatus('Could not load CSV: ' + r.error); };
   fr.readAsText(file, 'UTF-8');
 });
 

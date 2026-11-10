@@ -140,6 +140,21 @@ REGISTRATION_STEPS = [
         "submit_selector": "div.registrati-btn-container button",
         "wait_after": "",
     },
+    # ── Page 11: Document Details ───────────────────────────────────────
+    {
+        "name": "Page 11 - Document",
+        "fields": [
+            {"csv_col": "__document_type__",  "selector": "#tipoDocumento",   "type": "mat_select"},
+            {"csv_col": "__issuing_body__",   "selector": "#enteRilascio",    "type": "mat_select"},
+            {"csv_col": "Document number",    "selector": "#numeroDocumento", "type": "fill"},
+            {"csv_col": "Place of issue",     "selector": "#luogoRilascio",   "type": "autocomplete"},
+            {"csv_col": "__issue_date__",     "selector": "#dataEmissione",   "type": "date"},
+            {"csv_col": "__expiration_date__", "selector": "#dataScadenza",   "type": "date"},
+            {"csv_col": "Front image",        "selector": "button.btn-carica-doc", "type": "doc_upload"},
+        ],
+        "submit_selector": "button.go-on-btn",
+        "wait_after": "",
+    },
     # ── Close Jumio Modal (if present) ─────────────────────────────────
     {
         "name": "Close Jumio Modal",
