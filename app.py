@@ -78,6 +78,7 @@ DEFAULT_SETTINGS = {
     "selected_site":      "1",
     "bonus_selection":    "Casino",
     "excluded_profile_ids": [],
+    "profile_site_usage":  {},
 }
 
 class _SkipStep(Exception):
@@ -288,6 +289,31 @@ class API:
         self.save_settings(s)
         return {"ok": True, "excluded_profile_ids": current}
 
+    def _mark_profile_used(self, profile_id, site_id):
+        """Record that `profile_id` successfully registered on `site_id`."""
+        if not profile_id or not site_id:
+            return
+        s = self.load_settings()
+        usage = dict(s.get("profile_site_usage", {}) or {})
+        sites = list(usage.get(profile_id, []))
+        sid = str(site_id)
+        if sid not in sites:
+            sites.append(sid)
+        usage[profile_id] = sites
+        s["profile_site_usage"] = usage
+        self.save_settings(s)
+
+    def clear_profile_usage(self, profile_id):
+        """Reset a profile's per-site registration history so it can be reused."""
+        if not profile_id:
+            return {"error": "No profile ID provided."}
+        s = self.load_settings()
+        usage = dict(s.get("profile_site_usage", {}) or {})
+        usage.pop(profile_id, None)
+        s["profile_site_usage"] = usage
+        self.save_settings(s)
+        return {"ok": True}
+
     async def _fetch_profiles(self, token):
         """
         Fetch ALL profiles from GoLogin. The /browser/v2 endpoint paginates
@@ -299,7 +325,9 @@ class API:
         PAGE_SIZE = 100       # GoLogin accepts up to a few hundred; 100 is safe.
         MAX_PAGES = 200       # Hard safety cap → up to 20 000 profiles.
         out = []
-        excluded = set(self.load_settings().get("excluded_profile_ids", []))
+        s = self.load_settings()
+        excluded = set(s.get("excluded_profile_ids", []))
+        usage = s.get("profile_site_usage", {}) or {}
         try:
             async with aiohttp.ClientSession() as sess:
                 total_expected = None
@@ -341,11 +369,12 @@ class API:
                             proxy_str = f"{proxy.get('mode','http')}://{proxy['host']}:{proxy.get('port','')}"
                         pid = p.get("id", "")
                         out.append({
-                            "id":       pid,
-                            "name":     p.get("name", ""),
-                            "notes":    p.get("notes", ""),
-                            "proxy":    proxy_str,
-                            "excluded": pid in excluded,
+                            "id":         pid,
+                            "name":       p.get("name", ""),
+                            "notes":      p.get("notes", ""),
+                            "proxy":      proxy_str,
+                            "excluded":   pid in excluded,
+                            "used_sites": list(usage.get(pid, [])),
                         })
 
                     # Stop when the page is short (last page) or we've hit the total.
@@ -515,21 +544,30 @@ class API:
         name_to_id = {}
         profile_list = []
         excluded_ids = set(settings.get("excluded_profile_ids", []))
+        site_id = str(settings.get("selected_site", "1"))
+        usage_map = settings.get("profile_site_usage", {}) or {}
+        already_used_ids = {pid for pid, sites in usage_map.items() if site_id in (sites or [])}
         if token:
             self._emit("log", {"lvl": "info", "msg": "Loading GoLogin profile list…"})
             result = await self._fetch_profiles(token)
             if "profiles" in result:
-                skipped = 0
+                skipped_excluded = 0
+                skipped_used = 0
                 for p in result["profiles"]:
                     if p["id"] in excluded_ids:
-                        skipped += 1
+                        skipped_excluded += 1
+                        continue
+                    if p["id"] in already_used_ids:
+                        skipped_used += 1
                         continue
                     name_to_id[p["name"]]       = p["id"]
                     name_to_id[p["name"].strip()] = p["id"]
                     profile_list.append(p)
                 self._emit("log", {"lvl": "info", "msg": f"  {len(profile_list)} profiles loaded."})
-                if skipped:
-                    self._emit("log", {"lvl": "info", "msg": f"  {skipped} profile(s) excluded by user — skipped."})
+                if skipped_excluded:
+                    self._emit("log", {"lvl": "info", "msg": f"  {skipped_excluded} profile(s) excluded by user — skipped."})
+                if skipped_used:
+                    self._emit("log", {"lvl": "info", "msg": f"  {skipped_used} profile(s) already registered on site #{site_id} — skipped."})
             else:
                 self._emit("log", {"lvl": "warn", "msg": f"  Could not load profiles: {result.get('error')}"})
 
@@ -608,6 +646,13 @@ class API:
                         self._emit("row_done", {"i": i, "status": "SKIP", "label": label})
                         continue
 
+                    if pid in already_used_ids:
+                        msg = f"Profile '{raw_pid}' already registered on site #{site_id} — skipped"
+                        self._results.append({**row, "bot_status": "SKIP", "bot_message": msg})
+                        self._emit("log",      {"lvl": "warn", "msg": f"  ⚠ {msg}"})
+                        self._emit("row_done", {"i": i, "status": "SKIP", "label": label})
+                        continue
+
                 # ── Try profile, retry with next on access failure ──
                 max_retries = len(profile_list) - profile_idx if auto_mode else 1
                 ok = False
@@ -660,6 +705,8 @@ class API:
                 self._emit("row_done", {"i": i, "status": status, "label": label})
                 if ok:
                     ok_count += 1
+                    self._mark_profile_used(pid, site_id)
+                    already_used_ids.add(pid)
 
                 if auto_mode:
                     profile_idx += 1

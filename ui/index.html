@@ -290,6 +290,16 @@
   .profiles-table-wrap tbody tr.profile-excluded .profile-name-badge { text-decoration: line-through; }
   .skip-cell { text-align: center; width: 56px; }
   .skip-cell input { cursor: pointer; width: 16px; height: 16px; }
+  .usage-cell { white-space: nowrap; }
+  .usage-cell .site-pill {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    padding: 2px 7px; margin-right: 4px; border-radius: 10px;
+    background: #FEF3C7; color: #92400E; border: 1px solid #FDE68A;
+  }
+  .usage-cell .usage-empty { color: var(--fg-muted); font-size: 11.5px; }
+  .usage-cell .btn-clear {
+    margin-left: 6px; font-size: 11px; padding: 2px 8px;
+  }
 
   /* ── Run panel ── */
   .run-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; flex-shrink: 0; }
@@ -791,6 +801,29 @@ document.getElementById('pSearchInput').addEventListener('input', function() {
 });
 
 // ── GoLogin Profiles ───────────────────────────────────────────────
+function renderUsageCell(p) {
+  const used = Array.isArray(p.used_sites) ? p.used_sites : [];
+  if (!used.length) return '<span class="usage-empty">—</span>';
+  const pills = used.map(sid => {
+    const name = (state.sites && state.sites[sid] && state.sites[sid].name) || ('Site #' + sid);
+    return `<span class="site-pill" title="${esc(name)}">#${esc(sid)}</span>`;
+  }).join('');
+  return pills + '<button class="btn btn-sm btn-clear" type="button">Clear</button>';
+}
+
+function wireClearUsage(cell, p) {
+  const btn = cell.querySelector('.btn-clear');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    if (!confirm(`Clear registration history for "${p.name}"?\nThis profile will be eligible to register on every site again.`)) return;
+    const r = await api('clear_profile_usage', p.id);
+    if (r && r.error) { alert('Could not clear usage: ' + r.error); return; }
+    p.used_sites = [];
+    cell.innerHTML = renderUsageCell(p);
+    wireClearUsage(cell, p);
+  });
+}
+
 async function loadProfiles() {
   const token = document.getElementById('profilesToken').value.trim()
              || document.getElementById('cfgApiToken').value.trim();
@@ -809,17 +842,20 @@ async function loadProfiles() {
   tbl.innerHTML = `<thead><tr>
     <th title="Skip this profile during bot runs">Skip</th>
     <th>Name</th><th>Notes</th><th>Proxy</th>
+    <th title="Sites this profile has already registered on">Used on</th>
     <th>Profile ID (UUID)</th><th></th>
   </tr></thead>`;
   const tbody = document.createElement('tbody');
   profiles.forEach(p => {
     const tr = document.createElement('tr');
     if (p.excluded) tr.classList.add('profile-excluded');
+    const usageHtml = renderUsageCell(p);
     tr.innerHTML = `
       <td class="skip-cell"><input type="checkbox" ${p.excluded ? 'checked' : ''} title="Skip this profile during bot runs"></td>
       <td><span class="profile-name-badge">${esc(p.name)}</span></td>
       <td>${esc(p.notes)}</td>
       <td class="pid-mono">${esc(p.proxy)}</td>
+      <td class="usage-cell" data-pid="${esc(p.id)}">${usageHtml}</td>
       <td class="pid-mono">${esc(p.id)}</td>
       <td></td>`;
     const cb = tr.querySelector('.skip-cell input');
@@ -833,6 +869,7 @@ async function loadProfiles() {
       p.excluded = cb.checked;
       tr.classList.toggle('profile-excluded', cb.checked);
     });
+    wireClearUsage(tr.querySelector('.usage-cell'), p);
     const btn = document.createElement('button');
     btn.className = 'btn btn-sm'; btn.textContent = 'Copy ID';
     btn.addEventListener('click', () => {
