@@ -77,6 +77,7 @@ DEFAULT_SETTINGS = {
     "profile_mode":       "auto",
     "selected_site":      "1",
     "bonus_selection":    "Casino",
+    "excluded_profile_ids": [],
 }
 
 class _SkipStep(Exception):
@@ -273,6 +274,20 @@ class API:
         finally:
             loop.close()
 
+    def set_profile_excluded(self, profile_id, excluded):
+        """Mark/unmark a GoLogin profile so the bot will skip it during runs."""
+        if not profile_id:
+            return {"error": "No profile ID provided."}
+        s = self.load_settings()
+        current = list(s.get("excluded_profile_ids", []))
+        if excluded and profile_id not in current:
+            current.append(profile_id)
+        elif not excluded and profile_id in current:
+            current = [p for p in current if p != profile_id]
+        s["excluded_profile_ids"] = current
+        self.save_settings(s)
+        return {"ok": True, "excluded_profile_ids": current}
+
     async def _fetch_profiles(self, token):
         """
         Fetch ALL profiles from GoLogin. The /browser/v2 endpoint paginates
@@ -284,6 +299,7 @@ class API:
         PAGE_SIZE = 100       # GoLogin accepts up to a few hundred; 100 is safe.
         MAX_PAGES = 200       # Hard safety cap → up to 20 000 profiles.
         out = []
+        excluded = set(self.load_settings().get("excluded_profile_ids", []))
         try:
             async with aiohttp.ClientSession() as sess:
                 total_expected = None
@@ -323,11 +339,13 @@ class API:
                         proxy_str = ""
                         if proxy.get("host"):
                             proxy_str = f"{proxy.get('mode','http')}://{proxy['host']}:{proxy.get('port','')}"
+                        pid = p.get("id", "")
                         out.append({
-                            "id":    p.get("id", ""),
-                            "name":  p.get("name", ""),
-                            "notes": p.get("notes", ""),
-                            "proxy": proxy_str,
+                            "id":       pid,
+                            "name":     p.get("name", ""),
+                            "notes":    p.get("notes", ""),
+                            "proxy":    proxy_str,
+                            "excluded": pid in excluded,
                         })
 
                     # Stop when the page is short (last page) or we've hit the total.
@@ -496,15 +514,22 @@ class API:
         # Load profiles from GoLogin API
         name_to_id = {}
         profile_list = []
+        excluded_ids = set(settings.get("excluded_profile_ids", []))
         if token:
             self._emit("log", {"lvl": "info", "msg": "Loading GoLogin profile list…"})
             result = await self._fetch_profiles(token)
             if "profiles" in result:
+                skipped = 0
                 for p in result["profiles"]:
+                    if p["id"] in excluded_ids:
+                        skipped += 1
+                        continue
                     name_to_id[p["name"]]       = p["id"]
                     name_to_id[p["name"].strip()] = p["id"]
                     profile_list.append(p)
                 self._emit("log", {"lvl": "info", "msg": f"  {len(profile_list)} profiles loaded."})
+                if skipped:
+                    self._emit("log", {"lvl": "info", "msg": f"  {skipped} profile(s) excluded by user — skipped."})
             else:
                 self._emit("log", {"lvl": "warn", "msg": f"  Could not load profiles: {result.get('error')}"})
 
@@ -574,6 +599,13 @@ class API:
                         self._results.append({**row, "bot_status": "FAIL", "bot_message": msg})
                         self._emit("log",      {"lvl": "error", "msg": f"  ✗ {msg}"})
                         self._emit("row_done", {"i": i, "status": "FAIL", "label": label})
+                        continue
+
+                    if pid in excluded_ids:
+                        msg = f"Profile '{raw_pid}' is excluded by user — skipped"
+                        self._results.append({**row, "bot_status": "SKIP", "bot_message": msg})
+                        self._emit("log",      {"lvl": "warn", "msg": f"  ⚠ {msg}"})
+                        self._emit("row_done", {"i": i, "status": "SKIP", "label": label})
                         continue
 
                 # ── Try profile, retry with next on access failure ──
