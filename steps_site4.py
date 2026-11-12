@@ -61,23 +61,28 @@ SITE4_STEPS = [
         "wait_after": "",
     },
     # ── Page 6: Address + Document Details ─────────────────────────
+    # BetFlag tries to extract these fields from the uploaded ID document.
+    # When extraction succeeds, the page pre-fills some of them (often
+    # province, document type, release authority, sometimes the dates and
+    # city). `skip_if_filled: True` makes the bot leave any pre-filled
+    # value alone and type only into fields that are still empty.
     {
         "name": "Page 6 - Address & Document",
         "iframe": "#IframeSignup",
         "fields": [
-            {"csv_col": "__province_of_residence_code__", "selector": "#DDLProvinciaResidenzaDomicilio", "type": "select_postback"},
-            {"csv_col": "City of residence",   "selector": "#DDLComuneResidenza",    "type": "select_label"},
-            {"csv_col": "ZIP Code (CAP)",      "selector": "#CapResidenza",           "type": "fill"},
-            {"csv_col": "Address",             "selector": "#IndirizzoResidenza",     "type": "fill"},
-            {"csv_col": "__house_number__",    "selector": "#NumeroCivicoResidenza",  "type": "fill"},
-            {"csv_col": "Document number",     "selector": "#NumeroDocumento",        "type": "fill"},
-            {"csv_col": "__issue_day__",       "selector": "#DDLGiornoRilascioDoc",   "type": "select"},
-            {"csv_col": "__issue_month__",     "selector": "#DDLMeseRilascioDoc",     "type": "select"},
-            {"csv_col": "__issue_year__",      "selector": "#DDLAnnoRilascioDoc",     "type": "select"},
-            {"csv_col": "__expiry_day__",      "selector": "#DDLGiornoScadenzaDoc",   "type": "select"},
-            {"csv_col": "__expiry_month__",    "selector": "#DDLMeseScadenzaDoc",     "type": "select"},
-            {"csv_col": "__expiry_year__",     "selector": "#DDLAnnoScadenzaDoc",     "type": "select"},
-            {"csv_col": "Place of issue",      "selector": "#LuogoRilascioDoc",       "type": "fill"},
+            {"csv_col": "__province_of_residence_code__", "selector": "#DDLProvinciaResidenzaDomicilio", "type": "select_postback", "skip_if_filled": True},
+            {"csv_col": "City of residence",   "selector": "#DDLComuneResidenza",    "type": "select_label", "skip_if_filled": True},
+            {"csv_col": "ZIP Code (CAP)",      "selector": "#CapResidenza",           "type": "fill", "skip_if_filled": True},
+            {"csv_col": "Address",             "selector": "#IndirizzoResidenza",     "type": "fill", "skip_if_filled": True},
+            {"csv_col": "__house_number__",    "selector": "#NumeroCivicoResidenza",  "type": "fill", "skip_if_filled": True},
+            {"csv_col": "Document number",     "selector": "#NumeroDocumento",        "type": "fill", "skip_if_filled": True},
+            {"csv_col": "__issue_day__",       "selector": "#DDLGiornoRilascioDoc",   "type": "select", "skip_if_filled": True},
+            {"csv_col": "__issue_month__",     "selector": "#DDLMeseRilascioDoc",     "type": "select", "skip_if_filled": True},
+            {"csv_col": "__issue_year__",      "selector": "#DDLAnnoRilascioDoc",     "type": "select", "skip_if_filled": True},
+            {"csv_col": "__expiry_day__",      "selector": "#DDLGiornoScadenzaDoc",   "type": "select", "skip_if_filled": True},
+            {"csv_col": "__expiry_month__",    "selector": "#DDLMeseScadenzaDoc",     "type": "select", "skip_if_filled": True},
+            {"csv_col": "__expiry_year__",     "selector": "#DDLAnnoScadenzaDoc",     "type": "select", "skip_if_filled": True},
+            {"csv_col": "Place of issue",      "selector": "#LuogoRilascioDoc",       "type": "fill", "skip_if_filled": True},
         ],
         "submit_selector": "#Button1:visible, input[type='submit'][value='Continua' i]:visible, button:has-text('Continua'):visible",
         "wait_after": "",
@@ -136,7 +141,7 @@ SITE4_STEPS = [
         "submit_selector": "#Button1:visible, input[type='submit'][value='Continua' i]:visible, button:has-text('Continua'):visible",
         "wait_after": "",
     },
-    # ── Page 11: Welcome Modal ─────────────────────────────────────
+    # ── Page 11: Welcome Modal (required) ──────────────────────────
     # BetFlag often renders this modal in the PARENT page (outside
     # #IframeSignup). The runner falls back to the parent page when it
     # cannot see the button inside the iframe.
@@ -154,9 +159,8 @@ SITE4_STEPS = [
             "#popup-container button:has-text('Continua'):visible"
         ),
         "wait_after": "",
-        "optional": True,
     },
-    # ── Page 12: Spending Limit Agreement Modal ────────────────────
+    # ── Page 12: Spending Limit Agreement Modal (required) ─────────
     {
         "name": "Page 12 - Agreement Modal",
         "iframe": "#IframeSignup",
@@ -170,6 +174,5 @@ SITE4_STEPS = [
             ".modal.show input[value='Accetta' i]:visible"
         ),
         "wait_after": "",
-        "optional": True,
     },
 ]

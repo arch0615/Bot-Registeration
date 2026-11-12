@@ -1217,11 +1217,11 @@ class API:
         if field_type == "fill":
             await self._human_type(page, selector, value)
         elif field_type == "fill_skip_prefix":
-            # Append the CSV digits to the field WITHOUT clearing it. If the
-            # CSV value already contains the leading digits that are already
-            # in the field (e.g. a pre-filled "39" country prefix), skip
-            # them so we don't double the prefix. Used for BetFlag's phone
-            # boxes where the "39" is pre-populated.
+            # Append the CSV digits to the field WITHOUT clearing it, skipping
+            # any country prefix that is already covered elsewhere. BetFlag
+            # Page 7 shows "+39" in a sibling dropdown and leaves the input
+            # itself empty, so we also drop a leading "39" from the CSV when
+            # the number is longer than the 10-digit Italian mobile.
             kb = self._kb(page)
             el = page.locator(selector).first
             try:
@@ -1231,8 +1231,13 @@ class API:
             existing_digits = re.sub(r"\D", "", current or "")
             csv_digits      = re.sub(r"\D", "", value or "")
             remainder = csv_digits
-            if existing_digits and csv_digits.startswith(existing_digits):
-                remainder = csv_digits[len(existing_digits):]
+            # Strip the Italian country prefix when the CSV number clearly
+            # includes it (10-digit mobile + 2-digit country code = 12).
+            if remainder.startswith("39") and len(remainder) > 10:
+                remainder = remainder[2:]
+            # Strip whatever digits are already in the field (if any).
+            if existing_digits and remainder.startswith(existing_digits):
+                remainder = remainder[len(existing_digits):]
             await el.click()
             await kb.press("End")
             await asyncio.sleep(random.uniform(0.1, 0.3))
@@ -1694,11 +1699,31 @@ class API:
                             else:
                                 self._emit("log", {"lvl": "warn", "msg": f"    Iframe {iframe_sel} found but no Frame object (frames: {len(page.frames)})"})
                         except Exception as iframe_err:
-                            if optional:
-                                self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped (iframe not found)"})
-                                continue
-                            self._emit("log", {"lvl": "error", "msg": f"    Iframe {iframe_sel} not available: {iframe_err}"})
-                            raise
+                            # BetFlag often tears down #IframeSignup once
+                            # registration completes and shows the welcome /
+                            # agreement modal on the parent page. For
+                            # modal-like steps (submit-only, no fields),
+                            # probe that selector on the main page and, if
+                            # visible, run the step there instead. This
+                            # fallback runs for both optional and required
+                            # steps; `optional` only decides whether a
+                            # still-missing modal is a skip or a hard fail.
+                            found_on_main = False
+                            if step_submit and not step_fields:
+                                try:
+                                    await page.locator(step_submit).first.wait_for(state="visible", timeout=8000)
+                                    target = page
+                                    iframe_sel = ""  # Suppress later iframe-specific handling.
+                                    found_on_main = True
+                                    self._emit("log", {"lvl": "info", "msg": f"    Iframe gone; modal found on main page"})
+                                except Exception:
+                                    pass
+                            if not found_on_main:
+                                if optional:
+                                    self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped (iframe not found)"})
+                                    continue
+                                self._emit("log", {"lvl": "error", "msg": f"    Iframe {iframe_sel} not available: {iframe_err}"})
+                                raise
 
                     await self._inject_cursor(page)
 
@@ -1714,6 +1739,23 @@ class API:
 
                             if not sel and ftype not in ("gogoal_dropdown",):
                                 continue
+
+                            # Fields with skip_if_filled=True keep whatever
+                            # the site already filled in (e.g. BetFlag's
+                            # ID-extraction may populate province, document
+                            # type, release authority on Page 6). Only type
+                            # into the field if it is currently empty or the
+                            # default sentinel value ("", "0", "-1").
+                            if m.get("skip_if_filled"):
+                                try:
+                                    current = await target.locator(sel).first.evaluate(
+                                        "e => ((e.value ?? e.textContent) || '').toString().trim()"
+                                    )
+                                except Exception:
+                                    current = ""
+                                if current and current not in ("0", "-1", "false", "False"):
+                                    self._emit("log", {"lvl": "info", "msg": f"    Keep existing: {sel[:50]} = {current[:30]}"})
+                                    continue
 
                             if optional:
                                 try:
@@ -1865,28 +1907,31 @@ class API:
                             self._emit("log", {"lvl": "info", "msg": f"    Switched to new tab"})
                             await page.wait_for_load_state("domcontentloaded", timeout=15_000)
 
-                        # For optional steps with no fields (e.g. welcome/agreement
-                        # modals), the per-field optional-skip never runs because
-                        # the fields loop is empty. Probe the submit selector now
-                        # and skip gracefully if the modal did not appear. BetFlag
-                        # renders its post-registration modals in the parent page,
-                        # not inside #IframeSignup, so fall back to the main page.
-                        if step_submit and optional and not step_fields:
+                        # For modal-like steps (empty fields + submit only),
+                        # probe the submit selector on the iframe target, then
+                        # fall back to the parent page. BetFlag renders the
+                        # welcome/agreement modals on the parent page, not
+                        # inside #IframeSignup. For optional steps this skips
+                        # cleanly when neither has it; for required steps we
+                        # let the normal submit click raise its usual error.
+                        if step_submit and not step_fields:
                             probes = [target]
                             if target is not page:
                                 probes.append(page)
                             found_on = None
                             for probe in probes:
                                 try:
-                                    await probe.locator(step_submit).first.wait_for(state="visible", timeout=5000)
+                                    await probe.locator(step_submit).first.wait_for(state="visible", timeout=8000)
                                     found_on = probe
                                     break
                                 except Exception:
                                     continue
                             if found_on is None:
-                                self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped (modal not shown)"})
-                                raise _SkipStep()
-                            if found_on is not target:
+                                if optional:
+                                    self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped (modal not shown)"})
+                                    raise _SkipStep()
+                                self._emit("log", {"lvl": "warn", "msg": f"    Modal not visible yet; letting submit click wait…"})
+                            elif found_on is not target:
                                 self._emit("log", {"lvl": "info", "msg": f"    Modal found on main page (outside iframe)"})
                                 target = found_on
 
