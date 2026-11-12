@@ -300,6 +300,20 @@
   .usage-cell .btn-clear {
     margin-left: 6px; font-size: 11px; padding: 2px 8px;
   }
+  .profiles-pager {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 8px 2px; margin-top: 6px; flex-wrap: wrap;
+    font-size: 13px; color: var(--fg-muted);
+  }
+  .profiles-pager .profiles-count strong { color: var(--fg); font-weight: 600; }
+  .profiles-pager-controls { display: flex; align-items: center; gap: 8px; }
+  .pg-size-label { display: inline-flex; align-items: center; gap: 6px; }
+  .pg-select {
+    padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--surface); font-size: 13px;
+  }
+  .pg-info { font-variant-numeric: tabular-nums; min-width: 92px; text-align: center; }
+  .profiles-pager .btn-sm[disabled] { opacity: .45; cursor: not-allowed; }
 
   /* ── Run panel ── */
   .run-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; flex-shrink: 0; }
@@ -438,6 +452,10 @@
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
             Export
           </button>
+          <button class="btn" id="btnClearRegistrations" title="Forget which users have already been registered; the bot will stop skipping them.">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+            Clear Registrations
+          </button>
         </div>
       </div>
 
@@ -549,6 +567,26 @@
           <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px">
             <input type="radio" name="profileMode" value="manual" id="modeManual"> <strong>Manual</strong> — use <code>profile_name</code> column from CSV
           </label>
+        </div>
+      </div>
+
+      <div class="profiles-pager" id="profilesPager" hidden>
+        <div class="profiles-count">
+          Showing <strong id="pgRange">0</strong> of <strong id="pgTotal">0</strong> profiles
+        </div>
+        <div class="profiles-pager-controls">
+          <label class="pg-size-label">Per page:
+            <select id="pgSize" class="pg-select">
+              <option value="25">25</option>
+              <option value="50" selected>50</option>
+              <option value="100">100</option>
+              <option value="200">200</option>
+              <option value="all">All</option>
+            </select>
+          </label>
+          <button class="btn btn-sm" id="pgPrev" type="button">&larr; Prev</button>
+          <span id="pgInfo" class="pg-info">Page 1 / 1</span>
+          <button class="btn btn-sm" id="pgNext" type="button">Next &rarr;</button>
         </div>
       </div>
 
@@ -824,6 +862,8 @@ function wireClearUsage(cell, p) {
   });
 }
 
+const profilesState = { all: [], page: 1, size: 50 };
+
 async function loadProfiles() {
   const token = document.getElementById('profilesToken').value.trim()
              || document.getElementById('cfgApiToken').value.trim();
@@ -835,7 +875,43 @@ async function loadProfiles() {
   if (r.error) { showProfilesMessage('Error: ' + r.error, true); return; }
 
   const profiles = r.profiles || [];
-  if (!profiles.length) { showProfilesMessage('No profiles found for this account.'); return; }
+  if (!profiles.length) {
+    profilesState.all = [];
+    document.getElementById('profilesPager').hidden = true;
+    showProfilesMessage('No profiles found for this account.');
+    return;
+  }
+
+  profilesState.all = profiles;
+  profilesState.page = 1;
+  renderProfilesPage();
+
+  // Save token to settings
+  state.settings.gologin_api_token = token;
+  document.getElementById('cfgApiToken').value = token;
+  api('save_settings', state.settings);
+}
+
+function renderProfilesPage() {
+  const profiles = profilesState.all;
+  const total = profiles.length;
+  const sizeRaw = profilesState.size;
+  const size = sizeRaw === 'all' ? total : parseInt(sizeRaw, 10) || 50;
+  const pageCount = Math.max(1, Math.ceil(total / size));
+  if (profilesState.page > pageCount) profilesState.page = pageCount;
+  if (profilesState.page < 1) profilesState.page = 1;
+  const start = (profilesState.page - 1) * size;
+  const end   = Math.min(start + size, total);
+  const slice = profiles.slice(start, end);
+
+  // Update pager strip
+  const pager = document.getElementById('profilesPager');
+  pager.hidden = false;
+  document.getElementById('pgRange').textContent = total === 0 ? '0' : `${start + 1}–${end}`;
+  document.getElementById('pgTotal').textContent = String(total);
+  document.getElementById('pgInfo').textContent  = `Page ${profilesState.page} / ${pageCount}`;
+  document.getElementById('pgPrev').disabled = profilesState.page <= 1;
+  document.getElementById('pgNext').disabled = profilesState.page >= pageCount;
 
   const wrap = document.getElementById('profilesContent');
   const tbl = document.createElement('table');
@@ -846,7 +922,7 @@ async function loadProfiles() {
     <th>Profile ID (UUID)</th><th></th>
   </tr></thead>`;
   const tbody = document.createElement('tbody');
-  profiles.forEach(p => {
+  slice.forEach(p => {
     const tr = document.createElement('tr');
     if (p.excluded) tr.classList.add('profile-excluded');
     const usageHtml = renderUsageCell(p);
@@ -881,11 +957,6 @@ async function loadProfiles() {
   tbl.appendChild(tbody);
   wrap.innerHTML = '';
   wrap.appendChild(tbl);
-
-  // Save token to settings
-  state.settings.gologin_api_token = token;
-  document.getElementById('cfgApiToken').value = token;
-  api('save_settings', state.settings);
 }
 
 function showProfilesMessage(msg, isError = false) {
@@ -895,6 +966,17 @@ function showProfilesMessage(msg, isError = false) {
 
 document.getElementById('btnLoadProfiles').addEventListener('click', loadProfiles);
 document.getElementById('btnLoadProfiles2').addEventListener('click', loadProfiles);
+document.getElementById('pgPrev').addEventListener('click', () => {
+  if (profilesState.page > 1) { profilesState.page--; renderProfilesPage(); }
+});
+document.getElementById('pgNext').addEventListener('click', () => {
+  profilesState.page++; renderProfilesPage();
+});
+document.getElementById('pgSize').addEventListener('change', e => {
+  profilesState.size = e.target.value;
+  profilesState.page = 1;
+  renderProfilesPage();
+});
 
 // Token eye toggles
 function makeEyeToggle(eyeId, inputId) {
@@ -1141,6 +1223,13 @@ document.getElementById('btnExportCSV').addEventListener('click', async () => {
   syncToState();
   const p = await api('save_csv_dialog', state.headers, state.rows);
   if (p && !p.error) showStatus('Exported: ' + p);
+});
+
+document.getElementById('btnClearRegistrations').addEventListener('click', async () => {
+  if (!confirm('Clear the registration history for ALL users across every site?\n\nAfter this, the bot will try to register them again even if they were marked as already registered.')) return;
+  const r = await api('clear_all_user_registrations');
+  if (r && r.error) { showStatus('Could not clear history: ' + r.error); return; }
+  showStatus('Registration history cleared.');
 });
 </script>
 </body>

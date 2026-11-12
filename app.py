@@ -79,6 +79,7 @@ DEFAULT_SETTINGS = {
     "bonus_selection":    "Casino",
     "excluded_profile_ids": [],
     "profile_site_usage":  {},
+    "registered_user_sites": {},
 }
 
 class _SkipStep(Exception):
@@ -314,6 +315,53 @@ class API:
         self.save_settings(s)
         return {"ok": True}
 
+    @staticmethod
+    def _user_key(row):
+        """Stable identifier for a CSV row (email > tax ID > name combo)."""
+        if not isinstance(row, dict):
+            return ""
+        email = (row.get("email") or row.get("Email") or "").strip().lower()
+        if email:
+            return f"email:{email}"
+        tax = (row.get("Tax ID") or row.get("tax_id") or row.get("TaxID") or "").strip().upper()
+        if tax:
+            return f"tax:{tax}"
+        fn = (row.get("First name") or row.get("first_name") or "").strip().lower()
+        ln = (row.get("Last name")  or row.get("last_name")  or "").strip().lower()
+        if fn or ln:
+            return f"name:{fn}|{ln}"
+        return ""
+
+    def _mark_user_registered(self, user_key, site_id):
+        """Record that `user_key` successfully registered on `site_id`."""
+        if not user_key or not site_id:
+            return
+        s = self.load_settings()
+        reg = dict(s.get("registered_user_sites", {}) or {})
+        sites = list(reg.get(user_key, []))
+        sid = str(site_id)
+        if sid not in sites:
+            sites.append(sid)
+        reg[user_key] = sites
+        s["registered_user_sites"] = reg
+        self.save_settings(s)
+
+    def clear_all_user_registrations(self):
+        """Wipe the per-user per-site registration history."""
+        s = self.load_settings()
+        s["registered_user_sites"] = {}
+        self.save_settings(s)
+        return {"ok": True}
+
+    def get_registered_user_count(self, site_id=None):
+        """Return how many user records exist for a given site (or in total)."""
+        s = self.load_settings()
+        reg = s.get("registered_user_sites", {}) or {}
+        if site_id is None:
+            return {"count": len(reg), "total_pairs": sum(len(v or []) for v in reg.values())}
+        sid = str(site_id)
+        return {"count": sum(1 for sites in reg.values() if sid in (sites or []))}
+
     async def _fetch_profiles(self, token):
         """
         Fetch ALL profiles from GoLogin. The /browser/v2 endpoint paginates
@@ -322,9 +370,14 @@ class API:
         how many the account owns.
         """
         headers = {"Authorization": f"Bearer {token}"}
-        PAGE_SIZE = 100       # GoLogin accepts up to a few hundred; 100 is safe.
-        MAX_PAGES = 200       # Hard safety cap → up to 20 000 profiles.
+        # GoLogin's /browser/v2 silently caps `limit` at 30; asking for more
+        # yields 30 per page and the old "len < PAGE_SIZE => last page" check
+        # would then stop after the first page. We paginate until the API
+        # returns an empty page or we reach the reported total instead.
+        PAGE_SIZE = 50
+        MAX_PAGES = 400       # Hard safety cap → up to 12 000 profiles at 30/page.
         out = []
+        seen_ids = set()
         s = self.load_settings()
         excluded = set(s.get("excluded_profile_ids", []))
         usage = s.get("profile_site_usage", {}) or {}
@@ -362,12 +415,21 @@ class API:
                                     total_expected = data[k]
                                     break
 
+                    # Empty page → no more profiles to fetch.
+                    if not profiles:
+                        break
+
+                    new_this_page = 0
                     for p in profiles:
+                        pid = p.get("id", "")
+                        if pid and pid in seen_ids:
+                            continue  # Skip duplicates (defensive, in case API repeats).
+                        seen_ids.add(pid)
+                        new_this_page += 1
                         proxy = p.get("proxy") or {}
                         proxy_str = ""
                         if proxy.get("host"):
                             proxy_str = f"{proxy.get('mode','http')}://{proxy['host']}:{proxy.get('port','')}"
-                        pid = p.get("id", "")
                         out.append({
                             "id":         pid,
                             "name":       p.get("name", ""),
@@ -377,8 +439,10 @@ class API:
                             "used_sites": list(usage.get(pid, [])),
                         })
 
-                    # Stop when the page is short (last page) or we've hit the total.
-                    if len(profiles) < PAGE_SIZE:
+                    # Stop when the server starts returning only duplicates
+                    # (some APIs loop back to page 1 once exhausted) or we've
+                    # reached the reported total count.
+                    if new_this_page == 0:
                         break
                     if total_expected is not None and len(out) >= total_expected:
                         break
@@ -547,6 +611,7 @@ class API:
         site_id = str(settings.get("selected_site", "1"))
         usage_map = settings.get("profile_site_usage", {}) or {}
         already_used_ids = {pid for pid, sites in usage_map.items() if site_id in (sites or [])}
+        registered_users = settings.get("registered_user_sites", {}) or {}
         if token:
             self._emit("log", {"lvl": "info", "msg": "Loading GoLogin profile list…"})
             result = await self._fetch_profiles(token)
@@ -602,6 +667,15 @@ class API:
 
                 self._emit("progress", {"i": i, "total": total, "label": label})
                 self._emit("log", {"lvl": "info", "msg": f"[{i+1}/{total}] {label}"})
+
+                # ── Skip users already registered on this site ──
+                user_key = self._user_key(row)
+                if user_key and site_id in (registered_users.get(user_key, []) or []):
+                    msg = f"User already registered on site #{site_id} — skipped"
+                    self._results.append({**row, "bot_status": "SKIP", "bot_message": msg})
+                    self._emit("log",      {"lvl": "warn", "msg": f"  ⚠ {msg}"})
+                    self._emit("row_done", {"i": i, "status": "SKIP", "label": label})
+                    continue
 
                 # ── Resolve profile ID ──
                 if auto_mode:
@@ -707,6 +781,9 @@ class API:
                     ok_count += 1
                     self._mark_profile_used(pid, site_id)
                     already_used_ids.add(pid)
+                    if user_key:
+                        self._mark_user_registered(user_key, site_id)
+                        registered_users.setdefault(user_key, []).append(site_id)
 
                 if auto_mode:
                     profile_idx += 1
@@ -1125,7 +1202,7 @@ class API:
             except Exception:
                 pass
             # Skip disabled/readonly fields for fill/select types (pre-populated by server)
-            if field_type in ("fill", "append", "select", "select_label", "select_postback", "date", "autocomplete"):
+            if field_type in ("fill", "fill_skip_prefix", "append", "select", "select_label", "select_postback", "date", "autocomplete"):
                 try:
                     state = await page.locator(selector).first.evaluate(
                         "el => ({disabled: el.disabled, readonly: el.readOnly || el.hasAttribute('readonly')})"
@@ -1139,6 +1216,33 @@ class API:
         await self._random_pause(short=True)
         if field_type == "fill":
             await self._human_type(page, selector, value)
+        elif field_type == "fill_skip_prefix":
+            # Append the CSV digits to the field WITHOUT clearing it. If the
+            # CSV value already contains the leading digits that are already
+            # in the field (e.g. a pre-filled "39" country prefix), skip
+            # them so we don't double the prefix. Used for BetFlag's phone
+            # boxes where the "39" is pre-populated.
+            kb = self._kb(page)
+            el = page.locator(selector).first
+            try:
+                current = await el.evaluate("e => e.value || ''")
+            except Exception:
+                current = ""
+            existing_digits = re.sub(r"\D", "", current or "")
+            csv_digits      = re.sub(r"\D", "", value or "")
+            remainder = csv_digits
+            if existing_digits and csv_digits.startswith(existing_digits):
+                remainder = csv_digits[len(existing_digits):]
+            await el.click()
+            await kb.press("End")
+            await asyncio.sleep(random.uniform(0.1, 0.3))
+            for ch in remainder:
+                await kb.type(ch)
+                await asyncio.sleep(random.uniform(0.05, 0.18))
+            await el.dispatch_event("input")
+            await el.dispatch_event("change")
+            await kb.press("Tab")
+            await asyncio.sleep(random.uniform(0.1, 0.3))
         elif field_type == "append":
             kb = self._kb(page)
             el = page.locator(selector).first
@@ -1760,6 +1864,31 @@ class API:
                             page = ctx.pages[-1]
                             self._emit("log", {"lvl": "info", "msg": f"    Switched to new tab"})
                             await page.wait_for_load_state("domcontentloaded", timeout=15_000)
+
+                        # For optional steps with no fields (e.g. welcome/agreement
+                        # modals), the per-field optional-skip never runs because
+                        # the fields loop is empty. Probe the submit selector now
+                        # and skip gracefully if the modal did not appear. BetFlag
+                        # renders its post-registration modals in the parent page,
+                        # not inside #IframeSignup, so fall back to the main page.
+                        if step_submit and optional and not step_fields:
+                            probes = [target]
+                            if target is not page:
+                                probes.append(page)
+                            found_on = None
+                            for probe in probes:
+                                try:
+                                    await probe.locator(step_submit).first.wait_for(state="visible", timeout=5000)
+                                    found_on = probe
+                                    break
+                                except Exception:
+                                    continue
+                            if found_on is None:
+                                self._emit("log", {"lvl": "info", "msg": f"    Optional step skipped (modal not shown)"})
+                                raise _SkipStep()
+                            if found_on is not target:
+                                self._emit("log", {"lvl": "info", "msg": f"    Modal found on main page (outside iframe)"})
+                                target = found_on
 
                         if step_submit:
                             self._emit("log", {"lvl": "info", "msg": f"    Clicking submit: {step_submit[:60]}"})

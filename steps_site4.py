@@ -89,8 +89,8 @@ SITE4_STEPS = [
         "fields": [
             {"csv_col": "Email",      "selector": "#TextBox4",    "type": "fill"},
             {"csv_col": "Email",      "selector": "#TextBox22",   "type": "fill"},
-            {"csv_col": "Telephone",  "selector": "#TextBox12",   "type": "fill"},
-            {"csv_col": "Telephone",  "selector": "#TextBox12BIS","type": "fill"},
+            {"csv_col": "Telephone",  "selector": "#TextBox12",   "type": "fill_skip_prefix"},
+            {"csv_col": "Telephone",  "selector": "#TextBox12BIS","type": "fill_skip_prefix"},
         ],
         "submit_selector": "#Button1:visible, input[type='submit'][value='Continua' i]:visible, button:has-text('Continua'):visible",
         "wait_after": "",
@@ -137,11 +137,22 @@ SITE4_STEPS = [
         "wait_after": "",
     },
     # ── Page 11: Welcome Modal ─────────────────────────────────────
+    # BetFlag often renders this modal in the PARENT page (outside
+    # #IframeSignup). The runner falls back to the parent page when it
+    # cannot see the button inside the iframe.
     {
         "name": "Page 11 - Welcome Modal",
         "iframe": "#IframeSignup",
         "fields": [],
-        "submit_selector": "#PrintMessage.show .btn.success, #PrintMessageType .btn.success, #PrintMessage.show button:has-text('Continua'), .modal.show button:has-text('Continua'), .modal.show a:has-text('Continua')",
+        "submit_selector": (
+            "#PrintMessage.show .btn.success:visible, "
+            "#PrintMessageType .btn.success:visible, "
+            "#PrintMessage.show button:has-text('Continua'):visible, "
+            ".modal.show button:has-text('Continua'):visible, "
+            ".modal.show a:has-text('Continua'):visible, "
+            ".modal.show button:has-text('OK'):visible, "
+            "#popup-container button:has-text('Continua'):visible"
+        ),
         "wait_after": "",
         "optional": True,
     },
@@ -150,7 +161,14 @@ SITE4_STEPS = [
         "name": "Page 12 - Agreement Modal",
         "iframe": "#IframeSignup",
         "fields": [],
-        "submit_selector": "#ContentPlaceHolder1_BtnAccept:visible, #popup-container #ContentPlaceHolder1_BtnAccept, #popup-container input[value='Accetta' i]:visible, #popup-container button:has-text('Accetta'):visible",
+        "submit_selector": (
+            "#ContentPlaceHolder1_BtnAccept:visible, "
+            "#popup-container #ContentPlaceHolder1_BtnAccept, "
+            "#popup-container input[value='Accetta' i]:visible, "
+            "#popup-container button:has-text('Accetta'):visible, "
+            ".modal.show button:has-text('Accetta'):visible, "
+            ".modal.show input[value='Accetta' i]:visible"
+        ),
         "wait_after": "",
         "optional": True,
     },
