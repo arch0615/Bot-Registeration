@@ -140,29 +140,66 @@ REGISTRATION_STEPS = [
         "submit_selector": "div.registrati-btn-container button",
         "wait_after": "",
     },
-    # ── Page 11: Document Details ───────────────────────────────────────
+    # ── Page 11: Document Form ───────────────────────────────────────
     {
-        "name": "Page 11 - Document",
+        "name": "Page 11 - Document Form",
         "fields": [
-            {"csv_col": "__document_type__",  "selector": "#tipoDocumento",   "type": "mat_select"},
-            {"csv_col": "__issuing_body__",   "selector": "#enteRilascio",    "type": "mat_select"},
-            {"csv_col": "Document number",    "selector": "#numeroDocumento", "type": "fill"},
-            {"csv_col": "Place of issue",     "selector": "#luogoRilascio",   "type": "autocomplete"},
-            {"csv_col": "__issue_date__",     "selector": "#dataEmissione",   "type": "date"},
-            {"csv_col": "__expiration_date__", "selector": "#dataScadenza",   "type": "date"},
-            {"csv_col": "Front image",        "selector": "button.btn-carica-doc", "type": "doc_upload"},
+            {"csv_col": "__document_type__",   "selector": "mat-select[formcontrolname='tipoDocumento']",  "type": "mat_select"},
+            {"csv_col": "__issuing_body__",    "selector": "mat-select[formcontrolname='enteRilascio']",   "type": "mat_select"},
+            {"csv_col": "Document number",     "selector": "#numeroDocumento",                              "type": "fill"},
+            {"csv_col": "Place of issue",      "selector": "#luogoRilascio",                                "type": "autocomplete"},
+            {"csv_col": "__issue_date__",      "selector": "#dataEmissione",                                "type": "date"},
+            {"csv_col": "__expiration_date__",  "selector": "#dataScadenza",                                "type": "date"},
         ],
-        "submit_selector": "button.go-on-btn",
-        "wait_after": "",
+        "submit_selector": "button.btn-carica-doc, button:has-text('CARICA DOCUMENTO')",
+        "wait_after": "iframe[src*='jumio']",
+        "fail_selector": "text=La registrazione non è andata a buon fine",
     },
-    # ── Close Jumio Modal (if present) ─────────────────────────────────
+    # ── Page 12: Jumio - Start ───────────────────────────────────────
     {
-        "name": "Close Jumio Modal",
+        "name": "Page 12 - Jumio Inizia",
+        "iframe": "iframe[src*='jumio']",
         "fields": [
-            {"csv_col": "", "selector": "",  "type": "click"},  # TODO: close button selector
+            {"csv_col": "", "selector": "button:has-text('Inizia'), button:has-text('INIZIA')", "type": "click_first"},
         ],
         "submit_selector": "",
         "wait_after": "",
-        "optional": True,
+    },
+    # ── Page 13: Jumio - Choose Upload Source ────────────────────────
+    {
+        "name": "Page 13 - Jumio Caricare il file",
+        "iframe": "iframe[src*='jumio']",
+        "fields": [
+            {"csv_col": "", "selector": "x-ds-card[data-qa-id='upload'], x-ds-card[data-header='Caricare il file']", "type": "click_first"},
+        ],
+        "submit_selector": "",
+        "wait_after": "x-file-upload[data-key='FRONTSIDE']",
+    },
+    # ── Page 14: Jumio - Upload Front ────────────────────────────────
+    {
+        "name": "Page 14 - Jumio Upload Front",
+        "iframe": "iframe[src*='jumio']",
+        "fields": [
+            {"csv_col": "Front image", "selector": "x-file-upload[data-key='FRONTSIDE'] input[type='file'][data-qa-id='file-browser']", "type": "file_upload"},
+        ],
+        "submit_selector": "",
+        "wait_after": "x-file-upload[data-key='BACKSIDE'][data-enabled='true']",
+    },
+    # ── Page 15: Jumio - Upload Back ─────────────────────────────────
+    {
+        "name": "Page 15 - Jumio Upload Back",
+        "iframe": "iframe[src*='jumio']",
+        "fields": [
+            {"csv_col": "Back image", "selector": "x-file-upload[data-key='BACKSIDE'] input[type='file'][data-qa-id='file-browser']", "type": "file_upload"},
+        ],
+        "submit_selector": "x-ds-button[data-qa-id='continue-button']:not([data-disabled='true'])",
+        "wait_after": "button.go-on-btn:not([disabled]):has-text('REGISTRATI')",
+    },
+    # ── Page 16: Click REGISTRATI (main page) ────────────────────────
+    {
+        "name": "Page 16 - Registrati",
+        "fields": [],
+        "submit_selector": "button.go-on-btn:not([disabled]):has-text('REGISTRATI'), button:has-text('REGISTRATI'):not([disabled])",
+        "wait_after": "",
     },
 ]

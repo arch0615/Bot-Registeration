@@ -1315,7 +1315,44 @@ class API:
         elif field_type == "select":
             await page.select_option(selector, value)
         elif field_type == "select_label":
-            await page.select_option(selector, label=value)
+            # BetFlag's DDLComuneResidenza (and similar) lists its options in
+            # lowercase with a `text-capitalize` CSS class, while the CSV has
+            # title-case values ("Pianengo"). Playwright's label match is
+            # case-sensitive, so a direct select_option(label=...) would hang
+            # retrying until timeout. Resolve the matching option value in JS
+            # (case-insensitive, trimmed) and select by that value; also wait
+            # for options to populate after the preceding postback.
+            target_val = ""
+            try:
+                target_val = await page.locator(selector).first.evaluate(
+                    """(el, want) => {
+                        const norm = s => (s || '').toString().trim().toLowerCase();
+                        const w = norm(want);
+                        const opts = Array.from(el.options || []);
+                        // Prefer visible text match, then value match.
+                        const byText = opts.find(o => norm(o.textContent) === w);
+                        if (byText) return byText.value;
+                        const byVal  = opts.find(o => norm(o.value) === w);
+                        return byVal ? byVal.value : '';
+                    }""",
+                    value,
+                )
+            except Exception:
+                target_val = ""
+            if target_val:
+                await page.select_option(selector, target_val)
+            else:
+                # Fall back to Playwright's label match so that a genuinely
+                # matching option (or a clear timeout) is still surfaced.
+                await page.select_option(selector, label=value, timeout=5000)
+            # Many label-driven dropdowns fire an ASP.NET __doPostBack on
+            # change. Let the postback settle so follow-up fields don't race
+            # with the iframe reload.
+            await asyncio.sleep(0.3)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=8000)
+            except Exception:
+                await asyncio.sleep(2)
         elif field_type == "select_postback":
             await page.select_option(selector, value)
             await asyncio.sleep(0.3)

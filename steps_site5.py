@@ -160,4 +160,34 @@ SITE5_STEPS = [
         "wait_after": "",
         "optional": True,
     },
+    # ── Page 11: Registration Confirmed ──────────────────────────────
+    # "Complimenti! La tua registrazione è andata a buon fine"
+    # Two buttons: "Carica i tuoi documenti" and "Non ora".
+    # We dismiss the upload prompt with "Non ora" — registration is already
+    # complete; document upload is a separate concern and the account can
+    # upload later within the 60-day window the page mentions.
+    {
+        "name": "Page 11 - Registration Confirmed",
+        "fields": [
+            {"csv_col": "", "selector": "button:has-text('Non ora'), gogoal-button button.button--secondary:has-text('Non ora')", "type": "click_first"},
+        ],
+        "submit_selector": "",
+        "wait_after": "",
+        "optional": True,
+    },
+    # ── Page 12: Login with new account ──────────────────────────────
+    # After "Non ora" the site redirects to /account/login. Sign in using
+    # the username that Page 6 generated (__username__ — the resolver
+    # stored it back onto the row under the "Username" key) and the
+    # password from the CSV row.
+    {
+        "name": "Page 12 - Login",
+        "fields": [
+            {"csv_col": "Username", "selector": "#dynamicFormControlInput__username, input[name='username']", "type": "fill"},
+            {"csv_col": "Password", "selector": "#dynamicFormControlInput__password, input[name='password']", "type": "fill"},
+        ],
+        "submit_selector": "gogoal-button button.button--primary:has-text('Accedi'), button:has-text('Accedi')",
+        "wait_after": "",
+        "optional": True,
+    },
 ]
